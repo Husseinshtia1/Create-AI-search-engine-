@@ -79,7 +79,11 @@ class NearDuplicateStore:
 
     @staticmethod
     def _buckets(sig: tuple[int, ...]) -> tuple[str, ...]:
-        return tuple(f"b{i}:{value:016x}" for i, value in enumerate(sig[:8]))
+        # Bucket identity depends only on shingle-hash value, not its ordinal
+        # position in the sorted sketch. A small page edit can insert a lower
+        # hash and shift all later positions; positional buckets would then
+        # miss an otherwise highly similar candidate entirely.
+        return tuple(f"h:{value:016x}" for value in sig[:12])
 
     @staticmethod
     def _jaccard(a: frozenset[int], b: frozenset[int]) -> float:
