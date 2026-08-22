@@ -1,0 +1,23 @@
+[Unit]
+Description=G97 Live Crawl Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=g97
+Group=g97
+WorkingDirectory=/opt/g97
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/g97/.venv/bin/g97-live --data-dir /var/lib/g97 worker --max-depth 2 --max-retries 2 --idle-sleep 2 --recrawl-batch 100
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/g97
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
