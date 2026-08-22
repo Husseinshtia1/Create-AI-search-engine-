@@ -80,6 +80,19 @@ class DocumentRepository:
             row = con.execute("SELECT value FROM repository_meta WHERE key='generation'").fetchone()
             return int(row[0]) if row else 0
 
+    def snapshot_documents(self) -> tuple[int, list[StoredDocument]]:
+        """Return generation + documents from one SQLite read snapshot.
+
+        In WAL mode this lets a search process rebuild from a consistent view
+        while a crawler process continues committing newer generations.
+        """
+        with self._connect() as con:
+            con.execute("BEGIN")
+            generation_row = con.execute("SELECT value FROM repository_meta WHERE key='generation'").fetchone()
+            rows = con.execute("SELECT * FROM documents ORDER BY id").fetchall()
+            generation = int(generation_row[0]) if generation_row else 0
+        return generation, [self._row_to_doc(row) for row in rows]
+
     @staticmethod
     def _bump_generation(con: sqlite3.Connection) -> None:
         con.execute("UPDATE repository_meta SET value=value+1 WHERE key='generation'")
@@ -127,10 +140,8 @@ class DocumentRepository:
             return self._row_to_doc(row) if row else None
 
     def iter_documents(self) -> Iterable[StoredDocument]:
-        with self._connect() as con:
-            rows = con.execute("SELECT * FROM documents ORDER BY id").fetchall()
-        for row in rows:
-            yield self._row_to_doc(row)
+        _generation, docs = self.snapshot_documents()
+        yield from docs
 
     def count(self) -> int:
         with self._connect() as con:
