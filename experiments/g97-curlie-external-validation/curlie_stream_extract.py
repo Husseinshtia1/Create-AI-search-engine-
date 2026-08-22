@@ -11,9 +11,17 @@ WS=re.compile(r'\s+')
 
 def uidstr(x): return str(x).strip()
 
+def weburl(url):
+    s=(url or '').strip()
+    if not s: return ''
+    p=urlsplit(s)
+    if p.scheme: return s
+    if s.startswith('//'): return 'http:'+s
+    return 'http://'+s
+
 def hostkey(url):
     try:
-        p=urlsplit(url)
+        p=urlsplit(weburl(url))
         if p.scheme.lower() not in ('http','https'): return None
         h=(p.hostname or '').lower().rstrip('.')
         if h.startswith('www.'): h=h[4:]
@@ -56,7 +64,7 @@ def verify_labels(path,selected):
 class PageParser(HTMLParser):
     def __init__(self,base_url,host_to_uid,source_uid):
         super().__init__(convert_charrefs=True)
-        self.base=base_url; self.host_to_uid=host_to_uid; self.source=source_uid
+        self.base=weburl(base_url); self.host_to_uid=host_to_uid; self.source=source_uid
         self.skip=0; self.text=[]; self.a_href=None; self.a_text=[]; self.anchors=defaultdict(list)
     def handle_starttag(self,tag,attrs):
         tag=tag.lower()
