@@ -69,20 +69,29 @@ def run_one(name,node_path,edge_path):
     auth=authority(adj); lam=.50
     names=['T0_TEXT','T1_GLOBAL_DEGREE','T2_GLOBAL_AUTH','T3_LOCAL_LINK']
     pq={z:{'AP':[],'P10':[],'nDCG10':[],'MRR':[]} for z in names}
+    text_h=[]; local_pool_h=[]
     for q in range(n):
         base=Xn@Xn[q]; base[q]=-1
-        top10=np.argsort(-base)[:10]; local=np.zeros(n,dtype=np.float64); mx=max(float(base[top10[0]]),1e-12)
+        top10=np.argsort(-base)[:10]; text_h.append(sum(labels[s]==labels[q] for s in top10)/10)
+        local=np.zeros(n,dtype=np.float64); mx=max(float(base[top10[0]]),1e-12); pool=set()
         for s in top10:
             conf=max(0.0,float(base[s]))/mx
             for d in adj[s]:
-                if d!=q and base[d]>0: local[d]+=conf
+                if d!=q and base[d]>0:
+                    local[d]+=conf; pool.add(d)
+        local_pool_h.append(sum(labels[d]==labels[q] for d in pool)/len(pool) if pool else 0.0)
         local=local/(1+local)
         scores={'T0_TEXT':base.copy(),'T1_GLOBAL_DEGREE':base*(1+lam*deg),'T2_GLOBAL_AUTH':base*(1+lam*auth),'T3_LOCAL_LINK':base*(1+lam*local)}
         rel={i for i,l in enumerate(labels) if l==labels[q] and i!=q}
         for z,s in scores.items():
             r=[i for i in np.argsort(-s) if i!=q]
             pq[z]['AP'].append(ap(r,rel));pq[z]['P10'].append(pat(r,rel,10));pq[z]['nDCG10'].append(ndcg(r,rel));pq[z]['MRR'].append(rr(r,rel))
-    return {'name':name,'n':n,'features':X.shape[1],'classes':len(set(labels)),'edges':sum(len(x) for x in adj)//2,'pq':pq}
+    pairs=[]
+    for a,ns in enumerate(adj):
+        for b in ns:
+            if a<b:pairs.append((a,b))
+    edge_h=sum(labels[a]==labels[b] for a,b in pairs)/len(pairs) if pairs else 0.0
+    return {'name':name,'n':n,'features':X.shape[1],'classes':len(set(labels)),'edges':len(pairs),'pq':pq,'edge_h':edge_h,'text_h':float(np.mean(text_h)),'local_pool_h':float(np.mean(local_pool_h))}
 
 def main():
     a=argparse.ArgumentParser();a.add_argument('--root',required=True);a.add_argument('--out',default='results.tsv');x=a.parse_args()
@@ -98,12 +107,13 @@ def main():
                 vals=[np.mean(R['pq'][z][m]) for m in ['AP','P10','nDCG10','MRR']]
                 stats=(0,0,0,0,0,0) if z=='T0_TEXT' else bootstrap(b,R['pq'][z]['AP'])
                 f.write(R['name']+'\t'+z+'\t'+'\t'.join(f'{v:.6f}' for v in vals)+'\t'+'\t'.join(str(v) if isinstance(v,int) else f'{v:.6f}' for v in stats)+'\n')
-        # pooled query-level macro result across all three independent graphs
         for z in variants:
             pooled={m:sum((R['pq'][z][m] for R in runs),[]) for m in ['AP','P10','nDCG10','MRR']}
             vals=[np.mean(pooled[m]) for m in ['AP','P10','nDCG10','MRR']]
             b=sum((R['pq']['T0_TEXT']['AP'] for R in runs),[]); stats=(0,0,0,0,0,0) if z=='T0_TEXT' else bootstrap(b,pooled['AP'])
             f.write('POOLED\t'+z+'\t'+'\t'.join(f'{v:.6f}' for v in vals)+'\t'+'\t'.join(str(v) if isinstance(v,int) else f'{v:.6f}' for v in stats)+'\n')
-    for R in runs: print(R['name'],'pages',R['n'],'features',R['features'],'classes',R['classes'],'edges',R['edges'])
+    for R in runs:
+        print(R['name'],'pages',R['n'],'features',R['features'],'classes',R['classes'],'edges',R['edges'],
+              'edge_label_homophily',f"{R['edge_h']:.6f}",'text_top10_label_homophily',f"{R['text_h']:.6f}",'local_pool_label_homophily',f"{R['local_pool_h']:.6f}")
     print(open(x.out).read())
 if __name__=='__main__':main()
