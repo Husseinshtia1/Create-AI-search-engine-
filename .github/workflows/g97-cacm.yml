@@ -5,6 +5,10 @@ on:
     paths:
       - 'experiments/g97-cacm/**'
       - '.github/workflows/g97-cacm.yml'
+  pull_request:
+    paths:
+      - 'experiments/g97-cacm/**'
+      - '.github/workflows/g97-cacm.yml'
   workflow_dispatch:
 
 jobs:
