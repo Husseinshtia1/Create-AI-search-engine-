@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from g97.retrieval import tokenize
+from .dedup import NearDuplicateStore
 from .repository import DocumentRepository, StoredDocument
 from .segments import ImmutableSegmentStore
 
@@ -27,13 +28,20 @@ class LiveSearchIndex:
     Changed documents are published to immutable delta segments. Search uses
     segment-local TF-IDF only for bounded candidate generation, then applies a
     deterministic query/document lexical score that is comparable across
-    segments. No relevance feedback or validation qrels are consulted.
+    segments. Near-duplicate suppression is operational hygiene and is not part
+    of the frozen G97 research ranking claim.
     """
 
-    def __init__(self, repository: DocumentRepository, segment_dir: str | Path):
+    def __init__(
+        self,
+        repository: DocumentRepository,
+        segment_dir: str | Path,
+        *,
+        dedup: NearDuplicateStore | None = None,
+    ):
         self.repository = repository
+        self.dedup = dedup
         self.segments = ImmutableSegmentStore(segment_dir, repository)
-        # Bootstrap repositories created before the segment architecture.
         if self.segments.indexed_generation < repository.generation():
             self.segments.publish_changes()
 
@@ -65,7 +73,6 @@ class LiveSearchIndex:
         unique = list(dict.fromkeys(terms))
         if not unique:
             return 0.0, ()
-
         matched = sum(1 for term in unique if body.get(term, 0) or title.get(term, 0))
         coverage = matched / len(unique)
         tf_component = 0.0
@@ -75,12 +82,10 @@ class LiveSearchIndex:
                 tf_component += 1.0 + math.log(body[term])
             if title.get(term, 0):
                 title_component += 1.0 + math.log(title[term])
-
         length_norm = 1.0 / math.sqrt(max(1.0, float(len(body_tokens))))
         phrase = " ".join(terms)
         title_phrase = phrase in " ".join(title_tokens) if phrase else False
         body_phrase = phrase in " ".join(body_tokens) if phrase else False
-
         score = (tf_component * length_norm) + (1.75 * title_component) + (2.0 * coverage)
         evidence = ["body_lexical_match"]
         if title_component > 0:
@@ -98,28 +103,26 @@ class LiveSearchIndex:
         terms = tokenize(query)
         if not terms or k <= 0:
             return []
-
         candidates = self.segments.search_candidates(query, per_segment=max(50, int(k) * 8))
         rescored: list[tuple[StoredDocument, float, tuple[str, ...]]] = []
         for doc, _candidate_score in candidates.values():
+            if self.dedup is not None and self.dedup.is_duplicate(doc.doc_id):
+                continue
             score, evidence = self._lexical_score(doc, terms)
             if score > 0:
                 rescored.append((doc, score, evidence))
         rescored.sort(key=lambda item: (-item[1], item[0].url, item[0].doc_id))
-
-        hits: list[SearchHit] = []
-        for doc, score, evidence in rescored[: int(k)]:
-            hits.append(
-                SearchHit(
-                    doc_id=doc.doc_id,
-                    url=doc.url,
-                    title=doc.title or doc.url,
-                    snippet=self._snippet(doc.text, terms),
-                    score=float(score),
-                    evidence=evidence,
-                )
+        return [
+            SearchHit(
+                doc_id=doc.doc_id,
+                url=doc.url,
+                title=doc.title or doc.url,
+                snippet=self._snippet(doc.text, terms),
+                score=float(score),
+                evidence=evidence,
             )
-        return hits
+            for doc, score, evidence in rescored[: int(k)]
+        ]
 
     @staticmethod
     def _snippet(text: str, terms: Iterable[str], *, width: int = 220) -> str:
