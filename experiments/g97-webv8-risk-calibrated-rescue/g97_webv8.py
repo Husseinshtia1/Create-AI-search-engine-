@@ -143,7 +143,8 @@ def main():
         f.write('query\theldout_uni\tscore\ttau\tgate\tbody_recall30\tpolicy_recall30\tforced_delta\n')
         for r in all_policy:f.write('\t'.join(map(str,r))+'\n')
     print('G97-WEB V8 DEVELOPMENT ONLY: TRAINING-FOLD-ONLY RISK CALIBRATION')
-    print('pages',len(docs),'edges',sum(out.values()),'anchor_targets',len(weighted))
+    edge_count=sum(len(v) if isinstance(v,(set,list,tuple,dict)) else int(v) for v in out.values())
+    print('pages',len(docs),'edges',edge_count,'anchor_targets',len(weighted))
     print(open(args.out).read())
 
 if __name__=='__main__': main()
