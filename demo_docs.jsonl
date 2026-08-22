@@ -1,0 +1,3 @@
+{"doc_id":"1","url":"http://example.test/distributed","title":"Distributed Systems","body":"Distributed database systems, concurrency control, transactions and recovery.","fetched_at":0,"status":200,"content_type":"text/html","outlinks":[["http://example.test/databases","database research"]],"meta":{}}
+{"doc_id":"2","url":"http://example.test/databases","title":"Database Research","body":"Research on database concurrency, recovery, query processing and storage.","fetched_at":0,"status":200,"content_type":"text/html","outlinks":[],"meta":{}}
+{"doc_id":"3","url":"http://example.test/cooking","title":"Cooking","body":"Bread cheese kitchen cooking recipe.","fetched_at":0,"status":200,"content_type":"text/html","outlinks":[],"meta":{}}
