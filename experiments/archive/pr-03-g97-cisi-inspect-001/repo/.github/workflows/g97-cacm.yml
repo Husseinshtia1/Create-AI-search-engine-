@@ -1,0 +1,70 @@
+name: G97 CACM Frozen Benchmark
+
+on:
+  push:
+    paths:
+      - 'experiments/g97-cacm/**'
+      - '.github/workflows/g97-cacm.yml'
+  pull_request:
+    paths:
+      - 'experiments/g97-cacm/**'
+      - '.github/workflows/g97-cacm.yml'
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout experiment repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install frozen runtime dependency
+        run: pip install 'nltk==3.9.1'
+
+      - name: Fetch CACM historical collection
+        run: |
+          set -euxo pipefail
+          mkdir -p data/cacm
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/lucene4ir/lucene4ir/master/data/cacm/cacm.all -o data/cacm/cacm.all
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/lucene4ir/lucene4ir/master/data/cacm/title.query -o data/cacm/title.query
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/lucene4ir/lucene4ir/master/data/cacm/qrels.text -o data/cacm/qrels.text
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/lucene4ir/lucene4ir/master/data/cacm/common_words -o data/cacm/common_words
+          sha1sum data/cacm/cacm.all
+          python - <<'PY'
+          from collections import Counter
+          ids=[]
+          for line in open('data/cacm/cacm.all', encoding='utf-8', errors='replace'):
+              if line.startswith('.I '):
+                  ids.append(int(line.split()[1]))
+          c=Counter(ids)
+          dup={k:v for k,v in c.items() if v>1}
+          print('record_markers=',len(ids),'unique_ids=',len(c),'min_id=',min(c),'max_id=',max(c),'duplicates=',dup)
+          if len(c) != 3204 or min(c) != 1 or max(c) != 3204:
+              raise SystemExit('CACM unique document ID integrity check failed')
+          PY
+          # CACM qrels are: qid docid 0 0. Convert only the evaluation format
+          # to explicit TREC-style qid 0 docid 1; ranking code/parameters remain frozen.
+          awk '{print $1, 0, $2, 1}' data/cacm/qrels.text > data/cacm/qrels.trec
+
+      - name: Run frozen A0-A6 benchmark
+        run: |
+          python experiments/g97-cacm/g97_cacm_benchmark.py \
+            --docs data/cacm/cacm.all \
+            --queries data/cacm/title.query \
+            --qrels data/cacm/qrels.trec \
+            --stop data/cacm/common_words \
+            --out experiments/g97-cacm/results.tsv | tee experiments/g97-cacm/run.log
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: g97-cacm-frozen-results
+          path: |
+            experiments/g97-cacm/results.tsv
+            experiments/g97-cacm/run.log
+          if-no-files-found: error

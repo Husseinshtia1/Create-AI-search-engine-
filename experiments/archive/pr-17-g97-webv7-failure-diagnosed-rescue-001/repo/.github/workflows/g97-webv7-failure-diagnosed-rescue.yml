@@ -1,0 +1,35 @@
+name: G97 Web v7 Failure Diagnosed Rescue
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fetch original CMU WebKB ILP archive
+        run: |
+          set -euxo pipefail
+          for i in 1 2 3 4; do
+            curl -L --fail --retry 2 --retry-all-errors \
+              https://www.cs.cmu.edu/~WebKB/ilp-data.tar \
+              -o /tmp/ilp-data.tar && break || sleep 2
+          done
+          test -s /tmp/ilp-data.tar
+          mkdir -p /tmp/ilp
+          tar xf /tmp/ilp-data.tar -C /tmp/ilp
+      - name: Run frozen v7 experiment
+        run: |
+          set -euxo pipefail
+          mkdir -p experiments/g97-webv7-failure-diagnosed-rescue/out
+          python experiments/g97-webv7-failure-diagnosed-rescue/g97_webv7.py \
+            --root /tmp/ilp \
+            --out experiments/g97-webv7-failure-diagnosed-rescue/out/results.tsv \
+            | tee experiments/g97-webv7-failure-diagnosed-rescue/out/run.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g97-webv7-failure-diagnosed-rescue-results
+          path: experiments/g97-webv7-failure-diagnosed-rescue/out/

@@ -1,0 +1,55 @@
+name: G97 CISI Frozen Replication
+
+on:
+  pull_request:
+    paths:
+      - 'experiments/g97-cisi/**'
+      - '.github/workflows/g97-cisi-benchmark.yml'
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install frozen runtime dependency
+        run: pip install 'nltk==3.9.1'
+      - name: Fetch CISI and frozen stoplist
+        run: |
+          set -euxo pipefail
+          mkdir -p data/cisi
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/GianRomani/CISI-project-MLOps/main/CISI.ALL -o data/cisi/CISI.ALL
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/GianRomani/CISI-project-MLOps/main/CISI.QRY -o data/cisi/CISI.QRY
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/GianRomani/CISI-project-MLOps/main/CISI.REL -o data/cisi/CISI.REL
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/lucene4ir/lucene4ir/master/data/cacm/common_words -o data/cisi/common_words
+          sha1sum data/cisi/CISI.ALL data/cisi/CISI.QRY data/cisi/CISI.REL data/cisi/common_words
+          python - <<'PY'
+          ids=[]
+          for line in open('data/cisi/CISI.ALL',encoding='utf-8',errors='replace'):
+              if line.startswith('.I '): ids.append(int(line.split()[1]))
+          q=[]
+          for line in open('data/cisi/CISI.QRY',encoding='utf-8',errors='replace'):
+              if line.startswith('.I '): q.append(int(line.split()[1]))
+          print('docs',len(ids),len(set(ids)),min(ids),max(ids),'queries',len(q),len(set(q)),min(q),max(q))
+          assert len(set(ids))==1460 and min(ids)==1 and max(ids)==1460
+          assert len(set(q))==112 and min(q)==1 and max(q)==112
+          PY
+      - name: Run frozen CISI replication
+        run: |
+          python experiments/g97-cisi/g97_cisi_benchmark.py \
+            --docs data/cisi/CISI.ALL \
+            --queries data/cisi/CISI.QRY \
+            --qrels data/cisi/CISI.REL \
+            --stop data/cisi/common_words \
+            --out experiments/g97-cisi/results.tsv | tee experiments/g97-cisi/run.log
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: g97-cisi-frozen-results
+          path: |
+            experiments/g97-cisi/results.tsv
+            experiments/g97-cisi/run.log
+          if-no-files-found: error

@@ -1,0 +1,32 @@
+name: G97 Citeseer Frozen Stress
+on:
+  pull_request:
+    paths:
+      - 'experiments/g97-citeseer/**'
+      - '.github/workflows/g97-citeseer.yml'
+  workflow_dispatch:
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install 'numpy==2.1.3'
+      - name: Fetch Citeseer
+        run: |
+          set -euxo pipefail
+          mkdir -p data/citeseer
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/chenyazhen/pygcn_citeseer/master/data/citeseer/citeseer.content -o data/citeseer/citeseer.content
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/chenyazhen/pygcn_citeseer/master/data/citeseer/citeseer.cites -o data/citeseer/citeseer.cites
+          sha1sum data/citeseer/*
+      - name: Run frozen Citeseer stress test
+        run: |
+          python experiments/g97-citeseer/g97_citeseer_stress.py --content data/citeseer/citeseer.content --cites data/citeseer/citeseer.cites --out experiments/g97-citeseer/results.tsv | tee experiments/g97-citeseer/run.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g97-citeseer-frozen-results
+          path: |
+            experiments/g97-citeseer/results.tsv
+            experiments/g97-citeseer/run.log

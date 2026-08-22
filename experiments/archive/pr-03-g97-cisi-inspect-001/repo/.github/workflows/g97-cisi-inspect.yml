@@ -1,0 +1,79 @@
+name: G97 CISI Inspect
+
+on:
+  pull_request:
+    paths:
+      - 'experiments/g97-cisi/**'
+      - '.github/workflows/g97-cisi-inspect.yml'
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch CISI
+        run: |
+          set -euxo pipefail
+          mkdir -p data/cisi
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/GianRomani/CISI-project-MLOps/main/CISI.ALL -o data/cisi/CISI.ALL
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/GianRomani/CISI-project-MLOps/main/CISI.QRY -o data/cisi/CISI.QRY
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/GianRomani/CISI-project-MLOps/main/CISI.REL -o data/cisi/CISI.REL
+          sha1sum data/cisi/CISI.ALL data/cisi/CISI.QRY data/cisi/CISI.REL
+      - name: Inspect formats and cross-reference direction without scoring
+        run: |
+          python - <<'PY'
+          from collections import Counter, defaultdict
+          import re
+          p='data/cisi/CISI.ALL'
+          ids=[]; fields=Counter(); xrows=[]; cur=None; in_x=False
+          for raw in open(p,encoding='utf-8',errors='replace'):
+              line=raw.rstrip('\n\r')
+              if line.startswith('.I '):
+                  cur=int(line.split()[1]); ids.append(cur); in_x=False
+              elif re.fullmatch(r'\.[A-Z]', line):
+                  fields[line]+=1; in_x=(line=='.X')
+              elif in_x and line.strip():
+                  z=line.split()
+                  if len(z)>=3 and all(t.lstrip('-').isdigit() for t in z[:3]):
+                      xrows.append((cur,int(z[0]),int(z[1]),int(z[2])))
+          print('DOC_MARKERS',len(ids),'UNIQUE',len(set(ids)),'MIN',min(ids),'MAX',max(ids))
+          print('FIELDS',dict(fields))
+          print('X_ROWS',len(xrows),'TYPE_COUNTS',Counter(t for _,_,t,_ in xrows))
+          print('X_SAMPLE',xrows[:40])
+          # Test whether type 1 and type 2 are reciprocal orientations.
+          bypair=defaultdict(set)
+          for owner,nbr,typ,rowowner in xrows:
+              if rowowner==owner and nbr!=owner:
+                  bypair[(owner,nbr)].add(typ)
+          stats=Counter()
+          examples=[]
+          for (a,b),types in bypair.items():
+              for t in types:
+                  rev=bypair.get((b,a),set())
+                  if t==1:
+                      stats['type1_total']+=1
+                      if 2 in rev: stats['type1_rev_type2']+=1
+                      elif 1 in rev: stats['type1_rev_type1']+=1
+                      elif not rev: stats['type1_no_reverse']+=1
+                      if len(examples)<20: examples.append((a,b,1,sorted(rev)))
+                  elif t==2:
+                      stats['type2_total']+=1
+                      if 1 in rev: stats['type2_rev_type1']+=1
+                      elif 2 in rev: stats['type2_rev_type2']+=1
+                      elif not rev: stats['type2_no_reverse']+=1
+          print('RECIPROCITY',dict(stats))
+          print('RECIPROCITY_EXAMPLES',examples)
+          selftypes=Counter(typ for owner,nbr,typ,rowowner in xrows if owner==nbr)
+          print('SELF_TYPES',dict(selftypes))
+          qids=[]
+          for raw in open('data/cisi/CISI.QRY',encoding='utf-8',errors='replace'):
+              if raw.startswith('.I '): qids.append(int(raw.split()[1]))
+          print('QUERY_MARKERS',len(qids),'UNIQUE',len(set(qids)),'MIN',min(qids),'MAX',max(qids))
+          rel=[]
+          for raw in open('data/cisi/CISI.REL',encoding='utf-8',errors='replace'):
+              z=raw.split()
+              if z: rel.append(z)
+          print('REL_ROWS',len(rel),'FIRST20',rel[:20])
+          print('REL_WIDTHS',Counter(map(len,rel)))
+          PY

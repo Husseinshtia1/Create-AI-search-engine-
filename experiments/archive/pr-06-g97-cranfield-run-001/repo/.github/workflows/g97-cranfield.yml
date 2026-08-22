@@ -1,0 +1,33 @@
+name: G97 Cranfield Frozen Text Benchmark
+on:
+  pull_request:
+    paths:
+      - 'experiments/g97-cranfield/**'
+      - '.github/workflows/g97-cranfield.yml'
+  workflow_dispatch:
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install 'nltk==3.9.1'
+      - name: Fetch Cranfield
+        run: |
+          set -euxo pipefail
+          mkdir -p data/cran
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/oussbenk/cranfield-trec-dataset/main/cran.all.1400.xml -o data/cran/docs.xml
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/oussbenk/cranfield-trec-dataset/main/cran.qry.xml -o data/cran/queries.xml
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/oussbenk/cranfield-trec-dataset/main/cranqrel.trec.txt -o data/cran/qrels.txt
+          sha1sum data/cran/*
+      - name: Run frozen text benchmark
+        run: |
+          python experiments/g97-cranfield/g97_cranfield_benchmark.py --docs data/cran/docs.xml --queries data/cran/queries.xml --qrels data/cran/qrels.txt --out experiments/g97-cranfield/results.tsv | tee experiments/g97-cranfield/run.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g97-cranfield-results
+          path: |
+            experiments/g97-cranfield/results.tsv
+            experiments/g97-cranfield/run.log

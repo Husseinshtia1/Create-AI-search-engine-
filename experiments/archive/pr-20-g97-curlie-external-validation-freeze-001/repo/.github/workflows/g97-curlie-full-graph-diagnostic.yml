@@ -1,0 +1,37 @@
+name: G97 Curlie Full Graph Diagnostic
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/g97-curlie-full-graph-diagnostic.yml'
+      - 'experiments/g97-curlie-full-graph-diagnostic/**'
+  workflow_dispatch:
+jobs:
+  graph:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Download URL metadata
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 3 --retry-all-errors https://ndownloader.figshare.com/files/38937680 -o /tmp/curlie_filtered.csv.gz
+          echo '2977ded7cac86696ca452b0d4d312fd0  /tmp/curlie_filtered.csv.gz' | md5sum -c -
+      - name: Stream full HTML and diagnose internal graph only
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p experiments/g97-curlie-full-graph-diagnostic/out
+          curl -L --fail --retry 3 --retry-all-errors https://ndownloader.figshare.com/files/38937965 \
+            | gzip -dc \
+            | python experiments/g97-curlie-full-graph-diagnostic/full_graph_diagnostic.py \
+                --urls /tmp/curlie_filtered.csv.gz \
+                --out experiments/g97-curlie-full-graph-diagnostic/out/full_graph_stats.json \
+            | tee experiments/g97-curlie-full-graph-diagnostic/out/run.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g97-curlie-full-graph-diagnostic
+          path: experiments/g97-curlie-full-graph-diagnostic/out/

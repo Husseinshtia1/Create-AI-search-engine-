@@ -1,0 +1,31 @@
+name: G97 Web v2 Washington Frozen
+on:
+  pull_request:
+    paths:
+      - 'experiments/g97-webv2-washington/**'
+      - '.github/workflows/g97-webv2-washington.yml'
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install 'numpy==2.1.3'
+      - name: Fetch Washington WebKB
+        run: |
+          set -euxo pipefail
+          mkdir -p data/washington
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/sqrhussain/structure-in-gnn/b2edaca2bc1b62739b9221674b10914f0e0f62e0/data/graphs/processed/washington/washington.content -o data/washington/washington.content
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/sqrhussain/structure-in-gnn/b2edaca2bc1b62739b9221674b10914f0e0f62e0/data/graphs/processed/washington/washington.cites -o data/washington/washington.cites
+          sha1sum data/washington/*
+      - name: Run frozen G97-Web v2
+        run: |
+          python experiments/g97-webv2-washington/g97_webv2_washington.py --content data/washington/washington.content --cites data/washington/washington.cites --out experiments/g97-webv2-washington/results.tsv | tee experiments/g97-webv2-washington/run.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g97-webv2-washington-results
+          path: |
+            experiments/g97-webv2-washington/results.tsv
+            experiments/g97-webv2-washington/run.log

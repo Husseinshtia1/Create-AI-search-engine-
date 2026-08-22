@@ -1,0 +1,51 @@
+name: G97 CISI Inspect
+
+on:
+  pull_request:
+    paths:
+      - 'experiments/g97-cisi/**'
+      - '.github/workflows/g97-cisi-inspect.yml'
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch CISI
+        run: |
+          set -euxo pipefail
+          mkdir -p data/cisi
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/GianRomani/CISI-project-MLOps/main/CISI.ALL -o data/cisi/CISI.ALL
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/GianRomani/CISI-project-MLOps/main/CISI.QRY -o data/cisi/CISI.QRY
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/GianRomani/CISI-project-MLOps/main/CISI.REL -o data/cisi/CISI.REL
+          sha1sum data/cisi/CISI.ALL data/cisi/CISI.QRY data/cisi/CISI.REL
+      - name: Inspect formats without scoring
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          import re
+          p='data/cisi/CISI.ALL'
+          ids=[]; fields=Counter(); x_blocks=[]; cur=None; in_x=False
+          for raw in open(p,encoding='utf-8',errors='replace'):
+              line=raw.rstrip('\n\r')
+              if line.startswith('.I '):
+                  cur=int(line.split()[1]); ids.append(cur); in_x=False
+              elif re.fullmatch(r'\.[A-Z]', line):
+                  fields[line]+=1; in_x=(line=='.X')
+              elif in_x and line.strip():
+                  x_blocks.append((cur,line.strip()))
+          print('DOC_MARKERS',len(ids),'UNIQUE',len(set(ids)),'MIN',min(ids),'MAX',max(ids))
+          print('FIELDS',dict(fields))
+          print('X_LINES',len(x_blocks),'SAMPLE',x_blocks[:40])
+          qids=[]
+          for raw in open('data/cisi/CISI.QRY',encoding='utf-8',errors='replace'):
+              if raw.startswith('.I '): qids.append(int(raw.split()[1]))
+          print('QUERY_MARKERS',len(qids),'UNIQUE',len(set(qids)),'MIN',min(qids),'MAX',max(qids))
+          rel=[]
+          for raw in open('data/cisi/CISI.REL',encoding='utf-8',errors='replace'):
+              p=raw.split()
+              if p: rel.append(p)
+          print('REL_ROWS',len(rel),'FIRST40',rel[:40])
+          print('REL_WIDTHS',Counter(map(len,rel)))
+          PY
