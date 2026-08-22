@@ -1,0 +1,35 @@
+name: G97 WebKB Frozen Stress
+on:
+  pull_request:
+    paths:
+      - 'experiments/g97-webkb/**'
+      - '.github/workflows/g97-webkb.yml'
+  workflow_dispatch:
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install 'numpy==2.1.3'
+      - name: Fetch WebKB
+        run: |
+          set -euxo pipefail
+          mkdir -p data/webkb
+          for ds in cornell texas wisconsin; do
+            mkdir -p data/webkb/$ds
+            curl -L --fail --retry 3 https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/new_data/$ds/out1_node_feature_label.txt -o data/webkb/$ds/out1_node_feature_label.txt
+            curl -L --fail --retry 3 https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/new_data/$ds/out1_graph_edges.txt -o data/webkb/$ds/out1_graph_edges.txt
+          done
+          sha1sum data/webkb/*/*
+      - name: Run frozen WebKB stress test
+        run: |
+          python experiments/g97-webkb/g97_webkb_stress.py --root data/webkb --out experiments/g97-webkb/results.tsv | tee experiments/g97-webkb/run.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g97-webkb-frozen-results
+          path: |
+            experiments/g97-webkb/results.tsv
+            experiments/g97-webkb/run.log
