@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "g97-search"
-version = "0.1.0"
-description = "Historically constrained search-engine research framework (knowledge cutoff: 31 Dec 1996)"
+version = "0.2.0"
+description = "Historically constrained search-engine research framework and G97 Live Alpha runtime"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Research code; see repository documentation"}
@@ -14,6 +14,7 @@ dependencies = []
 
 [project.scripts]
 g97 = "g97.cli:main"
+g97-live = "g97.live.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
