@@ -1,0 +1,52 @@
+name: G97 Full Research Release Gate
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  release-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install reference engine and tests
+        run: |
+          python -m pip install -e .
+          python -m pip install 'pytest>=8,<9'
+      - name: Run invariant and runtime tests
+        run: python -m pytest -q
+      - name: Run reference search demo
+        run: python -m g97 demo_docs.jsonl search "distributed database" -k 3
+      - name: Verify required release areas
+        run: |
+          test -d g97
+          test -d experiments/g97-cacm
+          test -d experiments/g97-cisi
+          test -d experiments/g97-cora
+          test -d experiments/g97-cranfield
+          test -d experiments/g97-citeseer
+          test -d experiments/g97-webkb
+          test -d experiments/g97-webv2-washington
+          test -d experiments/g97-webv3-cmu-development
+          test -d experiments/g97-webv4-misc-holdout
+          test -d experiments/g97-webv5-evidence-budget-dev
+          test -d experiments/g97-webv6-anchor-rescue-dev
+          test -d experiments/g97-webv7-failure-diagnosed-rescue
+          test -d experiments/g97-webv8-risk-calibrated-rescue
+          test -d experiments/g97-curlie-external-validation
+          test -f docs/04_SOURCE_LEDGER.md
+          test -f docs/03_EXPERIMENT_LEDGER.md
+          test -f docs/10_PRODUCTION_ENGINE_PLAN.md
+      - name: Build complete source bundle
+        run: |
+          mkdir -p dist
+          git archive --format=zip --output=dist/G97-full-research-release-v0.1.zip HEAD
+          sha256sum dist/G97-full-research-release-v0.1.zip | tee dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g97-full-research-release-v0.1
+          path: dist/
