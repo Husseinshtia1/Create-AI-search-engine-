@@ -12,9 +12,9 @@ def parse_docs(p):
         out[did]=title+' '+text
     return out
 def parse_q(p):
-    root=ET.parse(p).getroot(); out={}
-    for t in root.findall('.//top'):
-        qid=int((t.findtext('num') or '0').strip()); out[qid]=(t.findtext('title') or '').strip()
+    root=ET.parse(p).getroot(); tops=root.findall('.//top'); out={}
+    for ordinal,t in enumerate(tops,1):
+        out[ordinal]=(t.findtext('title') or '').strip()
     return out
 def parse_rel(p):
     r=collections.defaultdict(set)
