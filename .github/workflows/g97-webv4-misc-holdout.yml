@@ -1,0 +1,39 @@
+name: G97 Web v4 Misc Holdout
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fetch original full WebKB archive
+        run: |
+          set -euxo pipefail
+          for u in \
+            'https://www.cs.cmu.edu/afs/cs/project/theo-20/www/data/webkb-data.gtar.gz' \
+            'http://www.cs.cmu.edu/afs/cs/project/theo-20/www/data/webkb-data.gtar.gz'; do
+            for i in 1 2 3; do
+              curl -L --fail --retry 2 --retry-all-errors "$u" -o /tmp/webkb-data.gtar.gz && break 2 || sleep 2
+            done
+          done
+          test -s /tmp/webkb-data.gtar.gz
+          mkdir -p /tmp/webkb
+          tar xzf /tmp/webkb-data.gtar.gz -C /tmp/webkb
+          echo "archive_bytes=$(wc -c < /tmp/webkb-data.gtar.gz)"
+          echo "files=$(find /tmp/webkb -type f | wc -l)"
+      - name: Run frozen misc holdout once
+        run: |
+          set -euxo pipefail
+          mkdir -p experiments/g97-webv4-misc-holdout/out
+          python experiments/g97-webv4-misc-holdout/g97_webv4_misc.py \
+            --root /tmp/webkb \
+            --out experiments/g97-webv4-misc-holdout/out/results.tsv \
+            | tee experiments/g97-webv4-misc-holdout/out/run.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g97-webv4-misc-holdout-results
+          path: experiments/g97-webv4-misc-holdout/out/
