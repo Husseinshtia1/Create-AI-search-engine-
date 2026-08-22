@@ -23,24 +23,19 @@ class SearchHit:
 
 
 class LiveSearchIndex:
-    """Segment-backed lexical search for the Live Alpha scale track.
-
-    Changed documents are published to immutable delta segments. Search uses
-    segment-local TF-IDF only for bounded candidate generation, then applies a
-    deterministic query/document lexical score that is comparable across
-    segments. Near-duplicate suppression is operational hygiene and is not part
-    of the frozen G97 research ranking claim.
-    """
+    """Segment-backed lexical search for the Live Alpha scale track."""
 
     def __init__(
         self,
         repository: DocumentRepository,
-        segment_dir: str | Path,
+        segment_dir: str | Path | None = None,
         *,
         dedup: NearDuplicateStore | None = None,
     ):
         self.repository = repository
         self.dedup = dedup
+        if segment_dir is None:
+            segment_dir = Path(repository.path).parent / "segments"
         self.segments = ImmutableSegmentStore(segment_dir, repository)
         if self.segments.indexed_generation < repository.generation():
             self.segments.publish_changes()
