@@ -1,3 +1,8 @@
+import json
+import math
+
+import pytest
+
 from g97.controller import FrozenController
 from g97.graph import bounded_rerank, query_local_channel
 from g97.retrieval import build_tfidf_index, exact_budget_rescue
@@ -43,3 +48,41 @@ def test_frozen_controller_shape():
     )
     assert ctrl.should_intervene([1.0, 1.0])
     assert not ctrl.should_intervene([-1.0, -1.0])
+
+
+def test_frozen_controller_rejects_dimension_mismatch():
+    with pytest.raises(ValueError, match="dimension mismatch"):
+        FrozenController(
+            means=(0.0, 0.0),
+            stds=(1.0,),
+            positive_centroid=(1.0, 1.0),
+            negative_centroid=(-1.0, -1.0),
+            threshold_tau=0.0,
+        )
+
+
+def test_frozen_controller_rejects_non_finite_features():
+    ctrl = FrozenController(
+        means=(0.0, 0.0),
+        stds=(1.0, 1.0),
+        positive_centroid=(1.0, 1.0),
+        negative_centroid=(-1.0, -1.0),
+        threshold_tau=0.0,
+    )
+    with pytest.raises(ValueError, match="finite"):
+        ctrl.score([math.nan, 1.0])
+
+
+def test_frozen_controller_json_feature_order_matches_dimension(tmp_path):
+    payload = {
+        "feature_order": ["only_one"],
+        "means": [0.0, 0.0],
+        "stds": [1.0, 1.0],
+        "positive_centroid": [1.0, 1.0],
+        "negative_centroid": [-1.0, -1.0],
+        "threshold_tau": 0.0,
+    }
+    path = tmp_path / "controller.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="feature_order"):
+        FrozenController.from_json(path)
