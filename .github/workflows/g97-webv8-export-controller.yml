@@ -1,0 +1,38 @@
+name: G97 Web v8 Export Frozen Controller
+on:
+  pull_request:
+    branches: [g97-webv7-predictability-diag-001]
+    paths:
+      - 'experiments/g97-webv8-risk-calibrated-rescue/**'
+      - '.github/workflows/g97-webv8-export-controller.yml'
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fetch original CMU WebKB ILP archive
+        run: |
+          set -euxo pipefail
+          for i in 1 2 3 4; do
+            curl -L --fail --retry 2 --retry-all-errors https://www.cs.cmu.edu/~WebKB/ilp-data.tar -o /tmp/ilp-data.tar && break || sleep 2
+          done
+          test -s /tmp/ilp-data.tar
+          mkdir -p /tmp/ilp
+          tar xf /tmp/ilp-data.tar -C /tmp/ilp
+      - name: Export controller from WebKB development data only
+        run: |
+          set -euxo pipefail
+          mkdir -p experiments/g97-webv8-risk-calibrated-rescue/out-controller
+          python experiments/g97-webv8-risk-calibrated-rescue/export_frozen_controller.py \
+            --root /tmp/ilp \
+            --out experiments/g97-webv8-risk-calibrated-rescue/out-controller/controller.json \
+            | tee experiments/g97-webv8-risk-calibrated-rescue/out-controller/run.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g97-webv8-webkb-only-controller
+          path: experiments/g97-webv8-risk-calibrated-rescue/out-controller/
