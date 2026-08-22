@@ -10,7 +10,7 @@ jobs:
       - name: Fetch and inspect CMU Industry Sector corpus
         run: |
           set -euxo pipefail
-          curl -L --fail --retry 4 --retry-all-errors https://www.cs.cmu.edu/afs/cs.cmu.edu/project/theo-4/text-learning/www/sector-data.tar.gz -o /tmp/sector.tar.gz
+          curl -L --fail --retry 4 --retry-all-errors https://www.cs.cmu.edu/~TextLearning/sector-data.tar.gz -o /tmp/sector.tar.gz
           ls -lh /tmp/sector.tar.gz
           tar tzf /tmp/sector.tar.gz > /tmp/files.txt
           echo FILES=$(wc -l < /tmp/files.txt)
