@@ -37,11 +37,7 @@ class LiveSearchIndex:
         return self._generation
 
     def refresh(self) -> None:
-        # Read generation after loading documents. If a writer commits during
-        # this rebuild, the next search sees a newer repository generation and
-        # refreshes again rather than falsely marking stale state as current.
-        docs = list(self.repository.iter_documents())
-        loaded_generation = self.repository.generation()
+        generation, docs = self.repository.snapshot_documents()
         self._documents = {str(doc.doc_id): doc for doc in docs}
         searchable = {
             str(doc.doc_id): (doc.title + "\n" + doc.text).strip()
@@ -49,7 +45,7 @@ class LiveSearchIndex:
             if doc.text.strip() or doc.title.strip()
         }
         self._index = build_tfidf_index(searchable)
-        self._generation = loaded_generation
+        self._generation = generation
 
     def ensure_fresh(self) -> bool:
         current = self.repository.generation()
