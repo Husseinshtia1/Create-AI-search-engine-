@@ -10,24 +10,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Fetch original full WebKB archive
+      - name: Fetch original CMU WebKB ILP archive
         run: |
           set -euxo pipefail
-          curl -L --fail --retry 3 --retry-all-errors \
-            https://www.cs.cmu.edu/afs/cs/project/theo-20/www/data/webkb-data.gtar.gz \
-            -o /tmp/webkb-data.gtar.gz
-          mkdir -p /tmp/webkb
-          tar xzf /tmp/webkb-data.gtar.gz -C /tmp/webkb
+          for i in 1 2 3 4; do
+            curl -L --fail --retry 2 --retry-all-errors \
+              https://www.cs.cmu.edu/~WebKB/ilp-data.tar \
+              -o /tmp/ilp-data.tar && break || sleep 2
+          done
+          test -s /tmp/ilp-data.tar
+          mkdir -p /tmp/ilp
+          tar xf /tmp/ilp-data.tar -C /tmp/ilp
       - name: Run external-description rescue test
         run: |
           set -euxo pipefail
-          PAGE_TEXT=$(find /tmp/webkb -type d -name page-text | head -1)
-          test -n "$PAGE_TEXT"
-          ROOT=$(dirname "$PAGE_TEXT")
-          echo "resolved_root=$ROOT"
           mkdir -p experiments/g97-webv6-anchor-rescue-dev/out
           python experiments/g97-webv6-anchor-rescue-dev/g97_webv6_rescue.py \
-            --root "$ROOT" \
+            --root /tmp/ilp \
             --out experiments/g97-webv6-anchor-rescue-dev/out/rescue.tsv \
             | tee experiments/g97-webv6-anchor-rescue-dev/out/run.log
       - uses: actions/upload-artifact@v4
