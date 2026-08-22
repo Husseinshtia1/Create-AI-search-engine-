@@ -20,19 +20,28 @@ class SearchHit:
 class LiveSearchIndex:
     """Deterministic in-process searchable delta for the Live Alpha.
 
-    The first alpha rebuilds the sparse TF-IDF index after changed-document
-    ingestion. This is intentionally simple and correct; later phases can
-    replace the implementation with immutable segments plus background merge.
+    The alpha index is rebuilt when the durable repository generation changes.
+    This keeps a separately running HTTP server fresh when a crawler worker in
+    another process commits new/changed documents.
     """
 
     def __init__(self, repository: DocumentRepository):
         self.repository = repository
         self._documents: dict[str, StoredDocument] = {}
         self._index = build_tfidf_index({})
+        self._generation = -1
         self.refresh()
 
+    @property
+    def generation(self) -> int:
+        return self._generation
+
     def refresh(self) -> None:
+        # Read generation after loading documents. If a writer commits during
+        # this rebuild, the next search sees a newer repository generation and
+        # refreshes again rather than falsely marking stale state as current.
         docs = list(self.repository.iter_documents())
+        loaded_generation = self.repository.generation()
         self._documents = {str(doc.doc_id): doc for doc in docs}
         searchable = {
             str(doc.doc_id): (doc.title + "\n" + doc.text).strip()
@@ -40,8 +49,17 @@ class LiveSearchIndex:
             if doc.text.strip() or doc.title.strip()
         }
         self._index = build_tfidf_index(searchable)
+        self._generation = loaded_generation
+
+    def ensure_fresh(self) -> bool:
+        current = self.repository.generation()
+        if current == self._generation:
+            return False
+        self.refresh()
+        return True
 
     def search(self, query: str, *, k: int = 10) -> list[SearchHit]:
+        self.ensure_fresh()
         terms = tokenize(query)
         if not terms or k <= 0:
             return []
