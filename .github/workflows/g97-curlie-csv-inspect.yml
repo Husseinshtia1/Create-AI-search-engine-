@@ -1,0 +1,38 @@
+name: G97 Curlie CSV Inspect
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/g97-curlie-csv-inspect.yml'
+      - 'experiments/g97-curlie-external-validation/**'
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Download and inspect small Curlie URL metadata only
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 3 --retry-all-errors https://ndownloader.figshare.com/files/38937680 -o /tmp/curlie_filtered.csv.gz
+          echo '2977ded7cac86696ca452b0d4d312fd0  /tmp/curlie_filtered.csv.gz' | md5sum -c -
+          python - <<'PY'
+          import csv,gzip,json
+          p='/tmp/curlie_filtered.csv.gz'
+          with gzip.open(p,'rt',encoding='utf-8',errors='replace',newline='') as f:
+              r=csv.reader(f)
+              for i,row in enumerate(r):
+                  print(i, json.dumps(row,ensure_ascii=False)[:4000])
+                  if i>=5: break
+          print('DICT')
+          with gzip.open(p,'rt',encoding='utf-8',errors='replace',newline='') as f:
+              d=csv.DictReader(f)
+              print('fields',repr(d.fieldnames))
+              for i,row in enumerate(d):
+                  print(i,repr(row.get('uid')),repr(row.get('url')))
+                  if i>=4: break
+          PY

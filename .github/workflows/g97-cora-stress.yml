@@ -1,0 +1,33 @@
+name: G97 Cora Frozen Stress
+on:
+  pull_request:
+    paths:
+      - 'experiments/g97-cora/**'
+      - '.github/workflows/g97-cora-stress.yml'
+  workflow_dispatch:
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install numpy
+        run: pip install 'numpy==2.1.3'
+      - name: Fetch Cora
+        run: |
+          set -euxo pipefail
+          mkdir -p data/cora
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/tkipf/pygcn/master/data/cora/cora.content -o data/cora/cora.content
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/tkipf/pygcn/master/data/cora/cora.cites -o data/cora/cora.cites
+          sha1sum data/cora/cora.content data/cora/cora.cites
+      - name: Run frozen stress test
+        run: |
+          python experiments/g97-cora/g97_cora_stress.py --content data/cora/cora.content --cites data/cora/cora.cites --out experiments/g97-cora/results.tsv | tee experiments/g97-cora/run.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g97-cora-frozen-results
+          path: |
+            experiments/g97-cora/results.tsv
+            experiments/g97-cora/run.log

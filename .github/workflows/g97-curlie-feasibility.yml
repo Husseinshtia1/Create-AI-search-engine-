@@ -1,0 +1,45 @@
+name: G97 Curlie Streaming Feasibility
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'experiments/g97-curlie-external-validation/**'
+      - '.github/workflows/g97-curlie-feasibility.yml'
+permissions:
+  contents: read
+jobs:
+  feasibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Download only small frozen metadata files
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/curlie
+          curl -L --fail --retry 3 --retry-all-errors https://ndownloader.figshare.com/files/34491224 -o /tmp/curlie/test_uid.txt
+          curl -L --fail --retry 3 --retry-all-errors https://ndownloader.figshare.com/files/34491125 -o /tmp/curlie/class_vector.json.gz
+          curl -L --fail --retry 3 --retry-all-errors https://ndownloader.figshare.com/files/38937680 -o /tmp/curlie/curlie_filtered.csv.gz
+          echo '0b84bd72da46b12573625dc82ae433a7  /tmp/curlie/test_uid.txt' | md5sum -c -
+          echo '76bac37003650e08d325b53e22f8a15f  /tmp/curlie/class_vector.json.gz' | md5sum -c -
+          echo '2977ded7cac86696ca452b0d4d312fd0  /tmp/curlie/curlie_filtered.csv.gz' | md5sum -c -
+      - name: Stream 14.8GB HTML gzip and retain frozen 20k sample only
+        run: |
+          set -euxo pipefail
+          mkdir -p experiments/g97-curlie-external-validation/out-feasibility
+          curl -L --fail --retry 3 --retry-all-errors https://ndownloader.figshare.com/files/38937965 \
+            | gzip -dc \
+            | python experiments/g97-curlie-external-validation/curlie_stream_extract.py \
+                --test-uid /tmp/curlie/test_uid.txt \
+                --classes /tmp/curlie/class_vector.json.gz \
+                --urls /tmp/curlie/curlie_filtered.csv.gz \
+                --outdir experiments/g97-curlie-external-validation/out-feasibility \
+            | tee experiments/g97-curlie-external-validation/out-feasibility/run.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g97-curlie-frozen-feasibility
+          path: experiments/g97-curlie-external-validation/out-feasibility/
