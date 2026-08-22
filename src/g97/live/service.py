@@ -53,7 +53,7 @@ class LiveSearchService:
     def enqueue_due_recrawls(self, *, limit: int = 100) -> int:
         added = 0
         for url in self.recrawl.due_urls(limit=limit):
-            if self.frontier.add(url, depth=0, discovered_from="recrawl"):
+            if self.frontier.requeue(url, depth=0, discovered_from="recrawl"):
                 added += 1
         return added
 
@@ -61,7 +61,6 @@ class LiveSearchService:
         item = self.frontier.claim_next()
         if item is None:
             return None
-
         fetch_started = time.perf_counter()
         result = self.crawler.crawl(item.url)
         fetch_ms = (time.perf_counter() - fetch_started) * 1000.0
