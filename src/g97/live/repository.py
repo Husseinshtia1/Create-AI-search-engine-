@@ -46,7 +46,6 @@ class DocumentRepository:
                     fetched_at TEXT NOT NULL,
                     version INTEGER NOT NULL DEFAULT 1
                 );
-
                 CREATE TABLE IF NOT EXISTS document_versions (
                     id INTEGER PRIMARY KEY,
                     document_id INTEGER NOT NULL,
@@ -58,12 +57,10 @@ class DocumentRepository:
                     UNIQUE(document_id, version),
                     FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
                 );
-
                 CREATE TABLE IF NOT EXISTS repository_meta (
                     key TEXT PRIMARY KEY,
                     value INTEGER NOT NULL
                 );
-
                 CREATE TABLE IF NOT EXISTS repository_changes (
                     generation INTEGER PRIMARY KEY,
                     document_id INTEGER NOT NULL,
@@ -71,14 +68,24 @@ class DocumentRepository:
                     changed_at TEXT NOT NULL,
                     FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
                 );
-
                 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(content_hash);
                 CREATE INDEX IF NOT EXISTS idx_versions_document ON document_versions(document_id, version);
-                CREATE INDEX IF NOT EXISTS idx_repository_changes_document
-                    ON repository_changes(document_id, generation);
+                CREATE INDEX IF NOT EXISTS idx_repository_changes_document ON repository_changes(document_id, generation);
                 """
             )
             con.execute("INSERT OR IGNORE INTO repository_meta(key,value) VALUES('generation',0)")
+            change_count = int(con.execute("SELECT COUNT(*) FROM repository_changes").fetchone()[0])
+            docs = con.execute("SELECT id,version,fetched_at FROM documents ORDER BY id").fetchall()
+            if docs and change_count == 0:
+                # Upgrade path for repositories created before repository_changes.
+                current = int(con.execute("SELECT value FROM repository_meta WHERE key='generation'").fetchone()[0])
+                for row in docs:
+                    current += 1
+                    con.execute(
+                        "INSERT INTO repository_changes(generation,document_id,version,changed_at) VALUES(?,?,?,?)",
+                        (current, int(row["id"]), int(row["version"]), str(row["fetched_at"])),
+                    )
+                con.execute("UPDATE repository_meta SET value=? WHERE key='generation'", (current,))
 
     @staticmethod
     def content_hash(title: str, text: str) -> str:
@@ -99,12 +106,6 @@ class DocumentRepository:
         return generation, [self._row_to_doc(row) for row in rows]
 
     def changes_after(self, generation: int, *, limit: int | None = None) -> tuple[int, list[StoredDocument]]:
-        """Return latest changed documents after a committed generation.
-
-        Multiple changes to the same document collapse to the newest visible
-        version in the returned snapshot. The returned generation and rows are
-        read transactionally so an indexer can safely checkpoint progress.
-        """
         generation = max(0, int(generation))
         with self._connect() as con:
             con.execute("BEGIN")
@@ -137,7 +138,6 @@ class DocumentRepository:
                 con.execute("UPDATE documents SET fetched_at=? WHERE id=?", (fetched_at, row["id"]))
                 current = con.execute("SELECT * FROM documents WHERE id=?", (row["id"],)).fetchone()
                 return self._row_to_doc(current), False
-
             if row is None:
                 cur = con.execute(
                     "INSERT INTO documents(url,title,text,content_hash,fetched_at,version) VALUES(?,?,?,?,?,1)",
@@ -152,7 +152,6 @@ class DocumentRepository:
                     "UPDATE documents SET title=?,text=?,content_hash=?,fetched_at=?,version=? WHERE id=?",
                     (title, text, digest, fetched_at, version, doc_id),
                 )
-
             con.execute(
                 "INSERT INTO document_versions(document_id,version,title,text,content_hash,fetched_at) VALUES(?,?,?,?,?,?)",
                 (doc_id, version, title, text, digest, fetched_at),
