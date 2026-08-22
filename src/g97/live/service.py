@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from .crawler import Crawler, CrawlConfig, CrawlResult
 from .frontier import URLFrontier
 from .index import LiveSearchIndex, SearchHit
 from .repository import DocumentRepository
+from .telemetry import TelemetryStore
 
 
 class LiveSearchService:
@@ -17,6 +19,7 @@ class LiveSearchService:
         root.mkdir(parents=True, exist_ok=True)
         self.repository = DocumentRepository(root / "documents.sqlite3")
         self.frontier = URLFrontier(root / "frontier.sqlite3")
+        self.telemetry = TelemetryStore(root / "telemetry.sqlite3")
         self.crawler = Crawler(self.repository, crawl_config)
         self.index = LiveSearchIndex(self.repository)
 
@@ -42,6 +45,12 @@ class LiveSearchService:
             if item.depth < max_depth:
                 for link in result.discovered_links:
                     self.frontier.add(link, depth=item.depth + 1, discovered_from=result.final_url)
+
+        self.telemetry.record_crawl(
+            status=result.status,
+            changed=result.changed,
+            discovered_links=len(result.discovered_links),
+        )
         return result
 
     def crawl(self, *, limit: int = 100, max_depth: int = 2, max_retries: int = 2) -> list[CrawlResult]:
@@ -54,12 +63,17 @@ class LiveSearchService:
         return results
 
     def search(self, query: str, *, k: int = 10) -> list[SearchHit]:
-        return self.index.search(query, k=k)
+        started = time.perf_counter()
+        hits = self.index.search(query, k=k)
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        self.telemetry.record_search(query, result_count=len(hits), latency_ms=latency_ms)
+        return hits
 
     def status(self) -> dict[str, object]:
         return {
             "documents": self.repository.count(),
             "frontier": self.frontier.counts(),
+            "telemetry": self.telemetry.summary(),
             "engine": "g97-live-alpha",
         }
 
