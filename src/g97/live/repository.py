@@ -64,8 +64,18 @@ class DocumentRepository:
                     value INTEGER NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS repository_changes (
+                    generation INTEGER PRIMARY KEY,
+                    document_id INTEGER NOT NULL,
+                    version INTEGER NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(content_hash);
                 CREATE INDEX IF NOT EXISTS idx_versions_document ON document_versions(document_id, version);
+                CREATE INDEX IF NOT EXISTS idx_repository_changes_document
+                    ON repository_changes(document_id, generation);
                 """
             )
             con.execute("INSERT OR IGNORE INTO repository_meta(key,value) VALUES('generation',0)")
@@ -81,11 +91,6 @@ class DocumentRepository:
             return int(row[0]) if row else 0
 
     def snapshot_documents(self) -> tuple[int, list[StoredDocument]]:
-        """Return generation + documents from one SQLite read snapshot.
-
-        In WAL mode this lets a search process rebuild from a consistent view
-        while a crawler process continues committing newer generations.
-        """
         with self._connect() as con:
             con.execute("BEGIN")
             generation_row = con.execute("SELECT value FROM repository_meta WHERE key='generation'").fetchone()
@@ -93,9 +98,36 @@ class DocumentRepository:
             generation = int(generation_row[0]) if generation_row else 0
         return generation, [self._row_to_doc(row) for row in rows]
 
+    def changes_after(self, generation: int, *, limit: int | None = None) -> tuple[int, list[StoredDocument]]:
+        """Return latest changed documents after a committed generation.
+
+        Multiple changes to the same document collapse to the newest visible
+        version in the returned snapshot. The returned generation and rows are
+        read transactionally so an indexer can safely checkpoint progress.
+        """
+        generation = max(0, int(generation))
+        with self._connect() as con:
+            con.execute("BEGIN")
+            current_row = con.execute("SELECT value FROM repository_meta WHERE key='generation'").fetchone()
+            current = int(current_row[0]) if current_row else 0
+            sql = (
+                "SELECT d.* FROM documents d JOIN ("
+                "SELECT document_id, MAX(generation) AS g FROM repository_changes "
+                "WHERE generation>? AND generation<=? GROUP BY document_id"
+                ") c ON c.document_id=d.id ORDER BY c.g ASC, d.id ASC"
+            )
+            params: list[object] = [generation, current]
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(max(0, int(limit)))
+            rows = con.execute(sql, params).fetchall()
+        return current, [self._row_to_doc(row) for row in rows]
+
     @staticmethod
-    def _bump_generation(con: sqlite3.Connection) -> None:
+    def _bump_generation(con: sqlite3.Connection) -> int:
         con.execute("UPDATE repository_meta SET value=value+1 WHERE key='generation'")
+        row = con.execute("SELECT value FROM repository_meta WHERE key='generation'").fetchone()
+        return int(row[0])
 
     def upsert(self, *, url: str, title: str, text: str, fetched_at: str) -> tuple[StoredDocument, bool]:
         digest = self.content_hash(title, text)
@@ -125,7 +157,11 @@ class DocumentRepository:
                 "INSERT INTO document_versions(document_id,version,title,text,content_hash,fetched_at) VALUES(?,?,?,?,?,?)",
                 (doc_id, version, title, text, digest, fetched_at),
             )
-            self._bump_generation(con)
+            generation = self._bump_generation(con)
+            con.execute(
+                "INSERT INTO repository_changes(generation,document_id,version,changed_at) VALUES(?,?,?,?)",
+                (generation, doc_id, version, fetched_at),
+            )
             current = con.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
             return self._row_to_doc(current), True
 
@@ -149,9 +185,7 @@ class DocumentRepository:
 
     def version_count(self, doc_id: int) -> int:
         with self._connect() as con:
-            return int(
-                con.execute("SELECT COUNT(*) FROM document_versions WHERE document_id=?", (doc_id,)).fetchone()[0]
-            )
+            return int(con.execute("SELECT COUNT(*) FROM document_versions WHERE document_id=?", (doc_id,)).fetchone()[0])
 
     @staticmethod
     def _row_to_doc(row: sqlite3.Row) -> StoredDocument:
