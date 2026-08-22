@@ -21,9 +21,13 @@ jobs:
       - name: Run external-description rescue test
         run: |
           set -euxo pipefail
+          PAGE_TEXT=$(find /tmp/webkb -type d -name page-text | head -1)
+          test -n "$PAGE_TEXT"
+          ROOT=$(dirname "$PAGE_TEXT")
+          echo "resolved_root=$ROOT"
           mkdir -p experiments/g97-webv6-anchor-rescue-dev/out
           python experiments/g97-webv6-anchor-rescue-dev/g97_webv6_rescue.py \
-            --root /tmp/webkb \
+            --root "$ROOT" \
             --out experiments/g97-webv6-anchor-rescue-dev/out/rescue.tsv \
             | tee experiments/g97-webv6-anchor-rescue-dev/out/run.log
       - uses: actions/upload-artifact@v4
