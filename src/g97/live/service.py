@@ -17,11 +17,12 @@ class LiveSearchService:
     def __init__(self, data_dir: str | Path, *, crawl_config: CrawlConfig | None = None):
         root = Path(data_dir)
         root.mkdir(parents=True, exist_ok=True)
+        self.root = root
         self.repository = DocumentRepository(root / "documents.sqlite3")
         self.frontier = URLFrontier(root / "frontier.sqlite3")
         self.telemetry = TelemetryStore(root / "telemetry.sqlite3")
         self.crawler = Crawler(self.repository, crawl_config)
-        self.index = LiveSearchIndex(self.repository)
+        self.index = LiveSearchIndex(self.repository, root / "segments")
 
     def submit_url(self, url: str, *, depth: int = 0, discovered_from: str | None = None) -> bool:
         canonical = self.crawler.canonicalize_url(url)
@@ -41,7 +42,8 @@ class LiveSearchService:
 
         if result.status == "INDEXED":
             if result.changed:
-                self.index.refresh()
+                self.index.publish_pending()
+                self.index.compact(max_segments=8)
             if item.depth < max_depth:
                 for link in result.discovered_links:
                     self.frontier.add(link, depth=item.depth + 1, discovered_from=result.final_url)
@@ -69,12 +71,23 @@ class LiveSearchService:
         self.telemetry.record_search(query, result_count=len(hits), latency_ms=latency_ms)
         return hits
 
+    def compact_index(self, *, max_segments: int = 8) -> bool:
+        return self.index.compact(max_segments=max_segments)
+
     def status(self) -> dict[str, object]:
+        segment_metas = self.index.segments.metas
         return {
             "documents": self.repository.count(),
+            "repository_generation": self.repository.generation(),
+            "indexed_generation": self.index.generation,
+            "segments": {
+                "count": len(segment_metas),
+                "disk_bytes": self.index.segments.disk_bytes(),
+                "documents_across_segments": sum(meta.document_count for meta in segment_metas),
+            },
             "frontier": self.frontier.counts(),
             "telemetry": self.telemetry.summary(),
-            "engine": "g97-live-alpha",
+            "engine": "g97-live-alpha-scale",
         }
 
     @staticmethod
