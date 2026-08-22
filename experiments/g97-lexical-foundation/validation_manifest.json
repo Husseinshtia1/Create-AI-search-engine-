@@ -1,0 +1,28 @@
+{
+  "protocol": "G97 Strong Lexical Foundation Freeze 001",
+  "historical_cutoff": "1996-12-31",
+  "development_collections": ["CACM", "CISI", "Cranfield"],
+  "validation_order": ["NPL", "TIME"],
+  "primary_validation": {
+    "name": "NPL",
+    "expected_documents": 11429,
+    "expected_queries": 93,
+    "role": "unseen_primary_validation"
+  },
+  "secondary_validation": {
+    "name": "TIME",
+    "expected_documents": 423,
+    "expected_queries": 83,
+    "role": "unseen_confirmation_holdout"
+  },
+  "qrels_access_before_policy_freeze": false,
+  "primary_metric": "MAP",
+  "secondary_metrics": ["MRR", "P@10", "Recall@100", "nDCG@10"],
+  "primary_depth": 100,
+  "no_validation_informed_tuning": true,
+  "policy_artifacts_required_before_validation": [
+    "PREPROCESSING_FROZEN.json",
+    "ACTIONS_FROZEN.json",
+    "POLICY_FROZEN.json"
+  ]
+}
