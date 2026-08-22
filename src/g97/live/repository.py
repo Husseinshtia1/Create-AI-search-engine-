@@ -26,10 +26,11 @@ class DocumentRepository:
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self.path)
+        con = sqlite3.connect(self.path, timeout=30.0)
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA foreign_keys=ON")
         con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=30000")
         return con
 
     def _init_schema(self) -> None:
@@ -58,15 +59,43 @@ class DocumentRepository:
                     FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS repository_meta (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(content_hash);
                 CREATE INDEX IF NOT EXISTS idx_versions_document ON document_versions(document_id, version);
                 """
             )
+            con.execute("INSERT OR IGNORE INTO repository_meta(key,value) VALUES('generation',0)")
 
     @staticmethod
     def content_hash(title: str, text: str) -> str:
         payload = (title.strip() + "\n" + text.strip()).encode("utf-8", errors="replace")
         return hashlib.sha256(payload).hexdigest()
+
+    def generation(self) -> int:
+        with self._connect() as con:
+            row = con.execute("SELECT value FROM repository_meta WHERE key='generation'").fetchone()
+            return int(row[0]) if row else 0
+
+    def snapshot_documents(self) -> tuple[int, list[StoredDocument]]:
+        """Return generation + documents from one SQLite read snapshot.
+
+        In WAL mode this lets a search process rebuild from a consistent view
+        while a crawler process continues committing newer generations.
+        """
+        with self._connect() as con:
+            con.execute("BEGIN")
+            generation_row = con.execute("SELECT value FROM repository_meta WHERE key='generation'").fetchone()
+            rows = con.execute("SELECT * FROM documents ORDER BY id").fetchall()
+            generation = int(generation_row[0]) if generation_row else 0
+        return generation, [self._row_to_doc(row) for row in rows]
+
+    @staticmethod
+    def _bump_generation(con: sqlite3.Connection) -> None:
+        con.execute("UPDATE repository_meta SET value=value+1 WHERE key='generation'")
 
     def upsert(self, *, url: str, title: str, text: str, fetched_at: str) -> tuple[StoredDocument, bool]:
         digest = self.content_hash(title, text)
@@ -96,6 +125,7 @@ class DocumentRepository:
                 "INSERT INTO document_versions(document_id,version,title,text,content_hash,fetched_at) VALUES(?,?,?,?,?,?)",
                 (doc_id, version, title, text, digest, fetched_at),
             )
+            self._bump_generation(con)
             current = con.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
             return self._row_to_doc(current), True
 
@@ -110,10 +140,8 @@ class DocumentRepository:
             return self._row_to_doc(row) if row else None
 
     def iter_documents(self) -> Iterable[StoredDocument]:
-        with self._connect() as con:
-            rows = con.execute("SELECT * FROM documents ORDER BY id").fetchall()
-        for row in rows:
-            yield self._row_to_doc(row)
+        _generation, docs = self.snapshot_documents()
+        yield from docs
 
     def count(self) -> int:
         with self._connect() as con:

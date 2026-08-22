@@ -38,6 +38,29 @@ def test_live_index_searches_repository(tmp_path: Path) -> None:
     assert "body_lexical_match" in hits[0].evidence
 
 
+def test_live_index_refreshes_when_another_repository_instance_writes(tmp_path: Path) -> None:
+    db = tmp_path / "docs.sqlite3"
+    server_repo = DocumentRepository(db)
+    worker_repo = DocumentRepository(db)
+    index = LiveSearchIndex(server_repo)
+
+    assert index.search("newly indexed term") == []
+    initial_generation = index.generation
+
+    worker_repo.upsert(
+        url="https://worker.example/new",
+        title="Fresh document",
+        text="newly indexed term appears here",
+        fetched_at="t1",
+    )
+    assert worker_repo.generation() > initial_generation
+
+    hits = index.search("newly indexed term")
+    assert hits
+    assert hits[0].url == "https://worker.example/new"
+    assert index.generation == worker_repo.generation()
+
+
 def test_frontier_is_durable_deduplicated_and_reclaims_expired_lease(tmp_path: Path) -> None:
     db = tmp_path / "frontier.sqlite3"
     frontier = URLFrontier(db)
