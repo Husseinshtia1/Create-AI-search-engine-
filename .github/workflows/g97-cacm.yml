@@ -47,13 +47,16 @@ jobs:
           if len(c) != 3204 or min(c) != 1 or max(c) != 3204:
               raise SystemExit('CACM unique document ID integrity check failed')
           PY
+          # CACM qrels are: qid docid 0 0. Convert only the evaluation format
+          # to explicit TREC-style qid 0 docid 1; ranking code/parameters remain frozen.
+          awk '{print $1, 0, $2, 1}' data/cacm/qrels.text > data/cacm/qrels.trec
 
       - name: Run frozen A0-A6 benchmark
         run: |
           python experiments/g97-cacm/g97_cacm_benchmark.py \
             --docs data/cacm/cacm.all \
             --queries data/cacm/title.query \
-            --qrels data/cacm/qrels.text \
+            --qrels data/cacm/qrels.trec \
             --stop data/cacm/common_words \
             --out experiments/g97-cacm/results.tsv | tee experiments/g97-cacm/run.log
 
