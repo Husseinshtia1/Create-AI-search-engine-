@@ -34,7 +34,7 @@ A new contributor can clone the repository, understand every major experiment an
 
 # Phase 1 — Finish Curlie external validation
 
-**Status: ACTIVE**
+**Status: CLOSED — FROZEN FEASIBILITY FAILURE**
 
 ### Frozen protocol
 - published Homepage2Vec test split;
@@ -48,16 +48,19 @@ A new contributor can clone the repository, understand every major experiment an
 - WebKB-only frozen v8 controller;
 - paired bootstrap with fixed seed.
 
-### Current work
-- finish 14.8 GB streaming extraction;
-- verify 20k URLs, labels and HTML records;
-- require >=1,000 distinct inbound targets for anchor feasibility;
-- run the frozen evaluator only if feasibility gate passes.
+### Final frozen feasibility result
 
-### Exit outcomes
-1. **Positive external validation** — controller improves frozen Curlie metric with defensible uncertainty.
-2. **Null/negative validation** — record failure and stop tuning v8 on Curlie.
+The 13.7 GiB HTML stream completed and all 20,000 selected records had URL, label and HTML data. The sample produced 2,720 directed internal edges and 4,928 anchor strings, but only **166 distinct inbound targets** against the predeclared requirement of **1,000**.
+
+Therefore the frozen evaluator was correctly not run. This is a feasibility failure of the frozen sample-internal anchor graph, not a negative retrieval result for v8.
+
+See `docs/CURLIE_EXTERNAL_VALIDATION_RESULT.md`.
+
+### Exit outcome reached
+
 3. **Feasibility failure** — graph/sample protocol cannot support the test; do not resize/filter sample post-hoc.
+
+No further v8 tuning on Curlie is permitted.
 
 ---
 
@@ -375,13 +378,12 @@ Do not optimize for UI polish before retrieval/crawl/serving gates pass.
 
 # Current immediate next actions
 
-1. Complete experiment-branch consolidation into `experiments/archive/`.
-2. Finish Curlie feasibility run after bare-host parser fix.
-3. If feasible, execute frozen Curlie evaluator with the already serialized WebKB-only controller.
-4. Record Curlie result without tuning.
-5. Consolidate reusable algorithms into `src/g97/` and add unit tests.
-6. Freeze the next independent lexical-foundation experiment.
-7. Start controlled crawler + TTQ implementation.
+1. Complete Phase 0 exit-gate reproduction evidence for CACM, CISI and one WebKB development run.
+2. Treat `G97-CURLIE-001` as closed with frozen feasibility failure; no post-hoc sample or threshold changes.
+3. Freeze the next independent Strong Lexical Foundation experiment before observing its validation results.
+4. Implement the lexical benchmark harness with equal-resource comparisons across TF-IDF, BM-family, field weighting, phrase/proximity, conservative stemming and spelling/OOV repair.
+5. Keep validation collections isolated from development collections and record per-query regime changes.
+6. Start controlled crawler + TTQ implementation on a separate engineering track without changing frozen retrieval experiments.
 
 ## Success criterion for the overall project
 
