@@ -29,6 +29,13 @@ jobs:
             --root /tmp/ilp \
             --out experiments/g97-webv6-anchor-rescue-dev/out/rescue.tsv \
             | tee experiments/g97-webv6-anchor-rescue-dev/out/run.log
+      - name: Run post-result complementarity diagnostic
+        run: |
+          set -euxo pipefail
+          python experiments/g97-webv6-anchor-rescue-dev/g97_webv6_diagnostic.py \
+            --root /tmp/ilp \
+            --out experiments/g97-webv6-anchor-rescue-dev/out/diagnostic.tsv \
+            | tee experiments/g97-webv6-anchor-rescue-dev/out/diagnostic.log
       - uses: actions/upload-artifact@v4
         with:
           name: g97-webv6-anchor-rescue-dev-results
