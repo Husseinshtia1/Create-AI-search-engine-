@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -36,11 +37,21 @@ class ImmutableSegmentStore:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.repository = repository
         self.manifest_path = self.directory / "manifest.json"
+        self.lock_db_path = self.directory / "segment-lock.sqlite3"
         self._loaded: list[_LoadedSegment] = []
         self._manifest_mtime_ns = -1
         if not self.manifest_path.exists():
             self._write_manifest([])
+        with self._lock_connect() as con:
+            con.execute("CREATE TABLE IF NOT EXISTS segment_lock (id INTEGER PRIMARY KEY CHECK(id=1), touched INTEGER NOT NULL DEFAULT 0)")
+            con.execute("INSERT OR IGNORE INTO segment_lock(id,touched) VALUES(1,0)")
         self.reload()
+
+    def _lock_connect(self) -> sqlite3.Connection:
+        con = sqlite3.connect(self.lock_db_path, timeout=30.0)
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=30000")
+        return con
 
     def _read_manifest(self) -> list[SegmentMeta]:
         payload = json.loads(self.manifest_path.read_text(encoding="utf-8"))
@@ -73,25 +84,16 @@ class ImmutableSegmentStore:
     @staticmethod
     def _payload_document(payload: dict[str, object]) -> StoredDocument:
         return StoredDocument(
-            doc_id=int(payload["doc_id"]),
-            url=str(payload["url"]),
-            title=str(payload["title"]),
-            text=str(payload["text"]),
-            content_hash=str(payload["content_hash"]),
-            fetched_at=str(payload["fetched_at"]),
-            version=int(payload["version"]),
+            doc_id=int(payload["doc_id"]), url=str(payload["url"]), title=str(payload["title"]),
+            text=str(payload["text"]), content_hash=str(payload["content_hash"]),
+            fetched_at=str(payload["fetched_at"]), version=int(payload["version"]),
         )
 
     def _load_segment(self, meta: SegmentMeta) -> _LoadedSegment:
-        path = self.directory / meta.name
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads((self.directory / meta.name).read_text(encoding="utf-8"))
         docs = [self._payload_document(item) for item in payload["documents"]]
         documents = {str(doc.doc_id): doc for doc in docs}
-        searchable = {
-            str(doc.doc_id): (doc.title + "\n" + doc.text).strip()
-            for doc in docs
-            if doc.title.strip() or doc.text.strip()
-        }
+        searchable = {str(doc.doc_id): (doc.title + "\n" + doc.text).strip() for doc in docs if doc.title.strip() or doc.text.strip()}
         return _LoadedSegment(meta=meta, documents=documents, index=build_tfidf_index(searchable))
 
     def reload(self) -> None:
@@ -115,36 +117,42 @@ class ImmutableSegmentStore:
         return max((meta.max_generation for meta in self.metas), default=0)
 
     def publish_changes(self) -> SegmentMeta | None:
-        start = self.indexed_generation
-        current, docs = self.repository.changes_after(start)
-        if current <= start or not docs:
-            return None
-        name = f"segment-{start + 1:020d}-{current:020d}.json"
-        path = self.directory / name
-        self._atomic_write_json(path, {"documents": [self._document_payload(doc) for doc in docs]})
-        meta = SegmentMeta(name=name, min_generation=start + 1, max_generation=current, document_count=len(docs))
-        self._write_manifest(list(self.metas) + [meta])
+        with self._lock_connect() as lock:
+            lock.execute("BEGIN IMMEDIATE")
+            self.reload()
+            start = self.indexed_generation
+            current, docs = self.repository.changes_after(start)
+            if current <= start or not docs:
+                return None
+            name = f"segment-{start + 1:020d}-{current:020d}.json"
+            self._atomic_write_json(self.directory / name, {"documents": [self._document_payload(doc) for doc in docs]})
+            meta = SegmentMeta(name=name, min_generation=start + 1, max_generation=current, document_count=len(docs))
+            self._write_manifest(list(self.metas) + [meta])
+            lock.execute("UPDATE segment_lock SET touched=touched+1 WHERE id=1")
         self.reload()
         return meta
 
     def compact(self, *, max_segments: int = 8) -> SegmentMeta | None:
-        metas = list(self.metas)
-        if len(metas) <= max(1, int(max_segments)):
-            return None
-        latest: dict[int, StoredDocument] = {}
-        for segment in self._loaded:
-            for doc in segment.documents.values():
-                prior = latest.get(doc.doc_id)
-                if prior is None or doc.version >= prior.version:
-                    latest[doc.doc_id] = doc
-        min_generation = min(meta.min_generation for meta in metas)
-        max_generation = max(meta.max_generation for meta in metas)
-        name = f"segment-compact-{min_generation:020d}-{max_generation:020d}.json"
-        path = self.directory / name
-        docs = [latest[key] for key in sorted(latest)]
-        self._atomic_write_json(path, {"documents": [self._document_payload(doc) for doc in docs]})
-        compacted = SegmentMeta(name=name, min_generation=min_generation, max_generation=max_generation, document_count=len(docs))
-        self._write_manifest([compacted])
+        with self._lock_connect() as lock:
+            lock.execute("BEGIN IMMEDIATE")
+            self.reload()
+            metas = list(self.metas)
+            if len(metas) <= max(1, int(max_segments)):
+                return None
+            latest: dict[int, StoredDocument] = {}
+            for segment in self._loaded:
+                for doc in segment.documents.values():
+                    prior = latest.get(doc.doc_id)
+                    if prior is None or doc.version >= prior.version:
+                        latest[doc.doc_id] = doc
+            min_generation = min(meta.min_generation for meta in metas)
+            max_generation = max(meta.max_generation for meta in metas)
+            name = f"segment-compact-{min_generation:020d}-{max_generation:020d}.json"
+            docs = [latest[key] for key in sorted(latest)]
+            self._atomic_write_json(self.directory / name, {"documents": [self._document_payload(doc) for doc in docs]})
+            compacted = SegmentMeta(name=name, min_generation=min_generation, max_generation=max_generation, document_count=len(docs))
+            self._write_manifest([compacted])
+            lock.execute("UPDATE segment_lock SET touched=touched+1 WHERE id=1")
         for meta in metas:
             if meta.name != compacted.name:
                 try:
@@ -160,12 +168,10 @@ class ImmutableSegmentStore:
         if not terms:
             return {}
         qvec = {term: 1.0 for term in terms}
-
         latest_versions: dict[int, int] = {}
         for segment in self._loaded:
             for doc in segment.documents.values():
                 latest_versions[doc.doc_id] = max(latest_versions.get(doc.doc_id, 0), doc.version)
-
         candidates: dict[int, tuple[StoredDocument, float]] = {}
         for segment in self._loaded:
             ranked = segment.index.retrieve("__query__", qvec, k=max(1, int(per_segment)))
