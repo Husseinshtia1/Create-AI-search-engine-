@@ -1,0 +1,60 @@
+name: G97 CACM Frozen Benchmark
+
+on:
+  push:
+    paths:
+      - 'experiments/g97-cacm/**'
+      - '.github/workflows/g97-cacm.yml'
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout experiment repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install frozen runtime dependency
+        run: pip install 'nltk==3.9.1'
+
+      - name: Fetch CACM historical collection
+        run: |
+          set -euxo pipefail
+          mkdir -p data/cacm
+          curl -L --fail --retry 3 \
+            https://raw.githubusercontent.com/lucene4ir/lucene4ir/master/data/cacm/cacm.all \
+            -o data/cacm/cacm.all
+          curl -L --fail --retry 3 \
+            https://raw.githubusercontent.com/lucene4ir/lucene4ir/master/data/cacm/title.query \
+            -o data/cacm/title.query
+          curl -L --fail --retry 3 \
+            https://raw.githubusercontent.com/lucene4ir/lucene4ir/master/data/cacm/qrels.text \
+            -o data/cacm/qrels.text
+          curl -L --fail --retry 3 \
+            https://raw.githubusercontent.com/lucene4ir/lucene4ir/master/data/cacm/common_words \
+            -o data/cacm/common_words
+          sha1sum data/cacm/cacm.all
+          test "$(grep -c '^.I ' data/cacm/cacm.all)" -eq 3204
+
+      - name: Run frozen A0-A6 benchmark
+        run: |
+          python experiments/g97-cacm/g97_cacm_benchmark.py \
+            --docs data/cacm/cacm.all \
+            --queries data/cacm/title.query \
+            --qrels data/cacm/qrels.text \
+            --stop data/cacm/common_words \
+            --out experiments/g97-cacm/results.tsv | tee experiments/g97-cacm/run.log
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: g97-cacm-frozen-results
+          path: |
+            experiments/g97-cacm/results.tsv
+            experiments/g97-cacm/run.log
+          if-no-files-found: error
