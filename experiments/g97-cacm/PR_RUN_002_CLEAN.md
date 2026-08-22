@@ -1,0 +1,1 @@
+Clean PR-visible trigger for Frozen Run 002. Only CACM qrels format normalization changed in the workflow; A0–A6 scoring parameters and ranking code remain frozen.
