@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from urllib.request import Request
 
@@ -7,6 +8,7 @@ from g97.live.crawler import CrawlConfig, Crawler
 from g97.live.frontier import URLFrontier
 from g97.live.index import LiveSearchIndex
 from g97.live.repository import DocumentRepository
+from g97.live.telemetry import TelemetryStore
 
 
 def test_repository_versions_and_exact_unchanged_fetch(tmp_path: Path) -> None:
@@ -36,16 +38,25 @@ def test_live_index_searches_repository(tmp_path: Path) -> None:
     assert "body_lexical_match" in hits[0].evidence
 
 
-def test_frontier_is_durable_and_deduplicated(tmp_path: Path) -> None:
+def test_frontier_is_durable_deduplicated_and_reclaims_expired_lease(tmp_path: Path) -> None:
     db = tmp_path / "frontier.sqlite3"
     frontier = URLFrontier(db)
     assert frontier.add("https://example.com/") is True
     assert frontier.add("https://example.com/") is False
 
-    claimed = frontier.claim_next()
+    claimed = frontier.claim_next(lease_seconds=60)
     assert claimed is not None
     assert claimed.url == "https://example.com/"
-    frontier.mark_done(claimed.url)
+    assert frontier.claim_next() is None
+
+    with sqlite3.connect(db) as con:
+        con.execute("UPDATE frontier SET lease_until=0 WHERE url=?", (claimed.url,))
+
+    recovered = frontier.claim_next()
+    assert recovered is not None
+    assert recovered.url == claimed.url
+    assert recovered.attempts == 2
+    frontier.mark_done(recovered.url)
 
     reopened = URLFrontier(db)
     assert reopened.counts()["DONE"] == 1
@@ -127,3 +138,23 @@ def test_robots_denial_prevents_page_fetch(tmp_path: Path) -> None:
     assert result.status == "ROBOTS_DENIED"
     assert calls == ["https://example.com/robots.txt"]
     assert repo.count() == 0
+
+
+def test_telemetry_does_not_store_raw_queries(tmp_path: Path) -> None:
+    db = tmp_path / "telemetry.sqlite3"
+    telemetry = TelemetryStore(db)
+    raw_query = "private experimental query"
+    telemetry.record_search(raw_query, result_count=0, latency_ms=12.5)
+    telemetry.record_crawl(status="INDEXED", changed=True, discovered_links=3)
+
+    summary = telemetry.summary()
+    assert summary["searches"] == 1
+    assert summary["zero_result_searches"] == 1
+    assert summary["crawl_attempts"] == 1
+    assert summary["indexed_crawls"] == 1
+
+    with sqlite3.connect(db) as con:
+        columns = [row[1] for row in con.execute("PRAGMA table_info(search_events)")]
+        row = con.execute("SELECT * FROM search_events").fetchone()
+    assert "query" not in columns
+    assert raw_query not in repr(row)
