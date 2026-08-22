@@ -59,8 +59,7 @@ class _HTMLTextParser(HTMLParser):
         if tag == "a":
             href = dict(attrs).get("href")
             if href:
-                absolute = urllib.parse.urljoin(self.base_url, href)
-                self.links.append(absolute)
+                self.links.append(urllib.parse.urljoin(self.base_url, href))
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -95,8 +94,8 @@ class Crawler:
     ):
         self.repository = repository
         self.config = config or CrawlConfig()
-        self._opener = opener or self._default_open
         self._resolver = resolver or self._resolve_host
+        self._opener = opener or self._default_open
         self._sleeper = sleeper
         self._clock = clock
         self._robots: dict[str, urllib.robotparser.RobotFileParser] = {}
@@ -113,7 +112,6 @@ class Crawler:
         default_port = (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
         netloc = host if port is None or default_port else f"{host}:{port}"
         path = parsed.path or "/"
-        # Fragments never identify a different fetched resource.
         return urllib.parse.urlunsplit((scheme, netloc, path, parsed.query, ""))
 
     def _assert_public_url(self, url: str) -> str:
@@ -166,8 +164,7 @@ class Crawler:
             else:
                 rp.parse([])
         except Exception:
-            # Network/robots retrieval failure is conservative: disallow this
-            # origin for this process instead of silently crawling it.
+            # Conservative fail-closed behavior when robots policy cannot be retrieved.
             rp.parse(["User-agent: *", "Disallow: /"])
         self._robots[origin] = rp
         return rp
@@ -222,7 +219,7 @@ class Crawler:
                     break
                 try:
                     link = self.canonicalize_url(raw_link)
-                except (ValueError, urllib.parse.PortValueError):
+                except ValueError:
                     continue
                 if link not in seen:
                     seen.add(link)
@@ -240,8 +237,16 @@ class Crawler:
             return CrawlResult(str(url), str(url), "ERROR", False, None, (), error=f"{type(exc).__name__}: {exc}")
 
     def _default_open(self, request: urllib.request.Request, timeout: float) -> tuple[int, str, dict[str, str], bytes]:
+        crawler = self
+
+        class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+                safe_url = crawler._assert_public_url(newurl)
+                return super().redirect_request(req, fp, code, msg, headers, safe_url)
+
+        opener = urllib.request.build_opener(SafeRedirectHandler())
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with opener.open(request, timeout=timeout) as response:
                 raw = response.read(self.config.max_bytes + 1)
                 headers = {k.lower(): v for k, v in response.headers.items()}
                 return int(response.status), str(response.geturl()), headers, raw
