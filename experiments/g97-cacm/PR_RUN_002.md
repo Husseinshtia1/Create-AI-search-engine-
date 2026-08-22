@@ -1,0 +1,1 @@
+Retry after acquisition-only integrity fix: validate 3204 unique CACM document IDs while reporting duplicate record markers. Benchmark scoring remains frozen.
