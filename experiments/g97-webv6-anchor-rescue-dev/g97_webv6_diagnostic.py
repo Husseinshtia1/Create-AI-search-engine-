@@ -10,6 +10,8 @@ spec=importlib.util.spec_from_file_location('v6',HERE/'g97_webv6_rescue.py')
 v6=importlib.util.module_from_spec(spec);spec.loader.exec_module(v6)
 KS=(10,20,50)
 
+def recall(items,rel): return len(set(items)&rel)/len(rel) if rel else 0.0
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--root',required=True);p.add_argument('--out',default='diagnostic.tsv');args=p.parse_args()
     docs,paths=v6.load_pages(args.root)
@@ -44,9 +46,10 @@ def main():
         if not rel:continue
         queries+=1;ar=anchor_runs[q]
         for k in KS:
-            aset=set(ar[:k]);b=set(br[:k]);b2=set(br[:2*k])
+            aset=set(ar[:k]);b=set(br[:k]);b2=set(br[:2*k]);b3=set(br[:3*k])
             outside=aset-b2
             good=outside&rel
+            expanded=b2|aset
             s=stats[k]
             s['anchor_candidates']+=len(aset)
             s['outside_body2k']+=len(outside)
@@ -55,12 +58,17 @@ def main():
             s['queries_anchor_nonempty']+=int(bool(aset))
             s['outside_bodyk_relevant']+=len((aset-b)&rel)
             s['body2k_relevant']+=len(b2&rel)
+            s['body3k_recall']+=recall(b3,rel)
+            s['expanded_recall']+=recall(expanded,rel)
+            s['expanded_size']+=len(expanded)
+            s['body3k_relevant']+=len(b3&rel)
     with open(args.out,'w') as f:
-        f.write('K\tqueries\tP(any_deep_rescue)\tNovelAnchorCandidatesPerQuery\tNovelAnchorPrecision\tDeepRelevantPerQuery\tOutsideBodyKRelevantPerQuery\tBody2KRelevantPerQuery\n')
+        f.write('K\tqueries\tP(any_deep_rescue)\tNovelAnchorCandidatesPerQuery\tNovelAnchorPrecision\tDeepRelevantPerQuery\tOutsideBodyKRelevantPerQuery\tBody2KRelevantPerQuery\tBodyRecall@3K\tBody2K+AnchorKRecall\tDeltaExpandedVsBody3K\tMeanExpandedSize\n')
         for k in KS:
             s=stats[k];n=queries
             nov=s['outside_body2k'];prec=s['deep_relevant']/nov if nov else 0.0
-            f.write(f'{k}\t{n}\t{s["queries_any_deep"]/n:.6f}\t{nov/n:.6f}\t{prec:.6f}\t{s["deep_relevant"]/n:.6f}\t{s["outside_bodyk_relevant"]/n:.6f}\t{s["body2k_relevant"]/n:.6f}\n')
+            b3=s['body3k_recall']/n;ex=s['expanded_recall']/n
+            f.write(f'{k}\t{n}\t{s["queries_any_deep"]/n:.6f}\t{nov/n:.6f}\t{prec:.6f}\t{s["deep_relevant"]/n:.6f}\t{s["outside_bodyk_relevant"]/n:.6f}\t{s["body2k_relevant"]/n:.6f}\t{b3:.6f}\t{ex:.6f}\t{ex-b3:.6f}\t{s["expanded_size"]/n:.3f}\n')
     print('POST-RESULT DEVELOPMENT DIAGNOSTIC ONLY')
     print('pages',len(docs),'targets_with_anchor_text',len(weighted),'queries',queries)
     print(open(args.out).read())
