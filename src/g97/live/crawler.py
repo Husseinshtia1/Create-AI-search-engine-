@@ -13,10 +13,12 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Callable, Iterable
 
+from .graph_store import LinkEvidence
+from .recrawl import RecrawlScheduler
 from .repository import DocumentRepository, StoredDocument
 
 
-USER_AGENT = "G97SearchBot/0.1 (+https://github.com/Husseinshtia1/Create-AI-search-engine-)"
+USER_AGENT = "G97SearchBot/0.2 (+https://github.com/Husseinshtia1/Create-AI-search-engine-)"
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class CrawlResult:
     changed: bool
     document: StoredDocument | None
     discovered_links: tuple[str, ...]
+    link_evidence: tuple[LinkEvidence, ...] = ()
     error: str | None = None
 
 
@@ -45,9 +48,11 @@ class _HTMLTextParser(HTMLParser):
         self.base_url = base_url
         self._skip_depth = 0
         self._in_title = False
+        self._anchor_href: str | None = None
+        self._anchor_parts: list[str] = []
         self.title_parts: list[str] = []
         self.text_parts: list[str] = []
-        self.links: list[str] = []
+        self.links: list[tuple[str, str]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
@@ -58,8 +63,8 @@ class _HTMLTextParser(HTMLParser):
             self._in_title = True
         if tag == "a":
             href = dict(attrs).get("href")
-            if href:
-                self.links.append(urllib.parse.urljoin(self.base_url, href))
+            self._anchor_href = urllib.parse.urljoin(self.base_url, href) if href else None
+            self._anchor_parts = []
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -67,6 +72,10 @@ class _HTMLTextParser(HTMLParser):
             self._skip_depth -= 1
         elif tag == "title":
             self._in_title = False
+        elif tag == "a" and self._anchor_href:
+            self.links.append((self._anchor_href, " ".join(self._anchor_parts).strip()))
+            self._anchor_href = None
+            self._anchor_parts = []
 
     def handle_data(self, data: str) -> None:
         if self._skip_depth:
@@ -76,17 +85,20 @@ class _HTMLTextParser(HTMLParser):
             return
         if self._in_title:
             self.title_parts.append(value)
+        if self._anchor_href:
+            self._anchor_parts.append(value)
         self.text_parts.append(value)
 
 
 class Crawler:
-    """Small, safety-bounded crawler suitable for a controlled Live Alpha."""
+    """Safety-bounded crawler with conditional fetch and observed anchor evidence."""
 
     def __init__(
         self,
         repository: DocumentRepository,
         config: CrawlConfig | None = None,
         *,
+        recrawl: RecrawlScheduler | None = None,
         opener: Callable[[urllib.request.Request, float], tuple[int, str, dict[str, str], bytes]] | None = None,
         resolver: Callable[[str], Iterable[str]] | None = None,
         sleeper: Callable[[float], None] = time.sleep,
@@ -94,6 +106,7 @@ class Crawler:
     ):
         self.repository = repository
         self.config = config or CrawlConfig()
+        self.recrawl = recrawl
         self._resolver = resolver or self._resolve_host
         self._opener = opener or self._default_open
         self._sleeper = sleeper
@@ -150,7 +163,6 @@ class Crawler:
         cached = self._robots.get(origin)
         if cached is not None:
             return cached
-
         robots_url = origin + "/robots.txt"
         rp = urllib.robotparser.RobotFileParser()
         rp.set_url(robots_url)
@@ -159,46 +171,55 @@ class Crawler:
             req = urllib.request.Request(safe_robots, headers={"User-Agent": self.config.user_agent})
             status, _final_url, _headers, body = self._opener(req, self.config.timeout_seconds)
             if 200 <= status < 300:
-                text = body[: self.config.max_bytes].decode("utf-8", errors="replace")
-                rp.parse(text.splitlines())
+                rp.parse(body[: self.config.max_bytes].decode("utf-8", errors="replace").splitlines())
             else:
                 rp.parse([])
         except Exception:
-            # Conservative fail-closed behavior when robots policy cannot be retrieved.
             rp.parse(["User-agent: *", "Disallow: /"])
         self._robots[origin] = rp
         return rp
 
     def crawl(self, url: str) -> CrawlResult:
+        canonical = str(url)
         try:
             canonical = self._assert_public_url(url)
-            parsed = urllib.parse.urlsplit(canonical)
-            host = parsed.hostname or ""
+            host = urllib.parse.urlsplit(canonical).hostname or ""
             robots = self._robots_for(canonical)
             if not robots.can_fetch(self.config.user_agent, canonical):
                 return CrawlResult(canonical, canonical, "ROBOTS_DENIED", False, None, ())
 
+            headers = {
+                "User-Agent": self.config.user_agent,
+                "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+                "Accept-Encoding": "gzip",
+            }
+            state = self.recrawl.get(canonical) if self.recrawl else None
+            if state and state.etag:
+                headers["If-None-Match"] = state.etag
+            if state and state.last_modified:
+                headers["If-Modified-Since"] = state.last_modified
+
             self._respect_delay(host)
-            req = urllib.request.Request(
-                canonical,
-                headers={
-                    "User-Agent": self.config.user_agent,
-                    "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
-                    "Accept-Encoding": "gzip",
-                },
-            )
-            status, final_url, headers, body = self._opener(req, self.config.timeout_seconds)
+            req = urllib.request.Request(canonical, headers=headers)
+            status, final_url, response_headers, body = self._opener(req, self.config.timeout_seconds)
             self._last_fetch[host] = self._clock()
 
+            if status == 304:
+                if self.recrawl:
+                    self.recrawl.record(canonical, status="NOT_MODIFIED", changed=False)
+                return CrawlResult(canonical, canonical, "NOT_MODIFIED", False, self.repository.get_by_url(canonical), ())
             if not (200 <= status < 300):
-                return CrawlResult(canonical, final_url, f"HTTP_{status}", False, None, ())
+                result = CrawlResult(canonical, final_url, f"HTTP_{status}", False, None, ())
+                if self.recrawl:
+                    self.recrawl.record(canonical, status=result.status, changed=False)
+                return result
 
             final_canonical = self._assert_public_url(final_url)
-            content_type = headers.get("content-type", "").lower()
+            content_type = response_headers.get("content-type", "").lower()
             if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
                 return CrawlResult(canonical, final_canonical, "NON_HTML", False, None, ())
 
-            if headers.get("content-encoding", "").lower() == "gzip":
+            if response_headers.get("content-encoding", "").lower() == "gzip":
                 body = gzip.decompress(body)
             if len(body) > self.config.max_bytes:
                 return CrawlResult(canonical, final_canonical, "TOO_LARGE", False, None, ())
@@ -212,28 +233,38 @@ class Crawler:
             title = " ".join(parser.title_parts).strip()
             text = " ".join(parser.text_parts).strip()
 
-            discovered: list[str] = []
-            seen: set[str] = set()
-            for raw_link in parser.links:
-                if len(discovered) >= self.config.max_links_per_page:
+            evidence: list[LinkEvidence] = []
+            seen: set[tuple[str, str]] = set()
+            for raw_link, anchor in parser.links:
+                if len(evidence) >= self.config.max_links_per_page:
                     break
                 try:
                     link = self.canonicalize_url(raw_link)
                 except ValueError:
                     continue
-                if link not in seen:
-                    seen.add(link)
-                    discovered.append(link)
+                key = (link, " ".join(anchor.split()))
+                if key not in seen:
+                    seen.add(key)
+                    evidence.append(LinkEvidence(target_url=key[0], anchor_text=key[1]))
 
+            discovered = tuple(dict.fromkeys(item.target_url for item in evidence))
             fetched_at = datetime.now(timezone.utc).isoformat()
-            document, changed = self.repository.upsert(
-                url=final_canonical,
-                title=title,
-                text=text,
-                fetched_at=fetched_at,
-            )
-            return CrawlResult(canonical, final_canonical, "INDEXED", changed, document, tuple(discovered))
+            document, changed = self.repository.upsert(url=final_canonical, title=title, text=text, fetched_at=fetched_at)
+            if self.recrawl:
+                self.recrawl.record(
+                    final_canonical,
+                    status="INDEXED",
+                    changed=changed,
+                    etag=response_headers.get("etag"),
+                    last_modified=response_headers.get("last-modified"),
+                )
+            return CrawlResult(canonical, final_canonical, "INDEXED", changed, document, discovered, tuple(evidence))
         except Exception as exc:
+            if self.recrawl:
+                try:
+                    self.recrawl.record(canonical, status="ERROR", changed=False)
+                except Exception:
+                    pass
             return CrawlResult(str(url), str(url), "ERROR", False, None, (), error=f"{type(exc).__name__}: {exc}")
 
     def _default_open(self, request: urllib.request.Request, timeout: float) -> tuple[int, str, dict[str, str], bytes]:
