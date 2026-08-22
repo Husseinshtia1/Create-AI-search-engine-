@@ -1,0 +1,21 @@
+dataset,variant,metric,value,status
+CACM,A0_C96,MAP,0.320769,frozen IR
+CACM,A6_CONTEXTGRAPH,MAP,0.334,frozen IR
+CISI,A0_C96,MAP,0.238474,external replication
+CISI,LOCAL_COUPLING,MAP,0.240911,external replication
+Cranfield,C96,MAP,0.182664,lexical benchmark
+Cranfield,TFIDF,MAP,0.289093,lexical benchmark
+Cora,TEXT,MAP,0.287237,stress test
+Cora,LOCAL_CITATION,MAP,0.292174,stress test
+Citeseer,TEXT,MAP,0.284816,stress test
+Citeseer,LOCAL_CITATION,MAP,0.287093,stress test
+WebKB-CTW,TEXT,MAP,0.561372,web stress
+WebKB-CTW,LOCAL_LINK,MAP,0.523075,web stress
+Washington,TEXT,MAP,0.580321,holdout
+Washington,QUALIFIED_LINK,MAP,0.566208,holdout
+WebKB-original,TEXT,MAP,0.566857,development
+WebKB-original,ANCHOR_ONLY,MAP,0.565657,development
+WebKB-misc,TEXT,MAP,0.458778,same-family holdout
+WebKB-misc,G97_WEB_V4,MAP,0.458764,same-family holdout
+WebKB-v8,BODY30,Recall@30,0.244735,OOF development
+WebKB-v8,RISK_CALIBRATED,Recall@30,0.244801,OOF development
