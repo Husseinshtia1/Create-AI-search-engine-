@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import math
+from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
-from g97.retrieval import build_tfidf_index, tokenize
+from g97.retrieval import tokenize
 from .repository import DocumentRepository, StoredDocument
+from .segments import ImmutableSegmentStore
 
 
 @dataclass(frozen=True)
@@ -18,55 +22,93 @@ class SearchHit:
 
 
 class LiveSearchIndex:
-    """Deterministic in-process searchable delta for the Live Alpha.
+    """Segment-backed lexical search for the Live Alpha scale track.
 
-    The alpha index is rebuilt when the durable repository generation changes.
-    This keeps a separately running HTTP server fresh when a crawler worker in
-    another process commits new/changed documents.
+    Changed documents are published to immutable delta segments. Search uses
+    segment-local TF-IDF only for bounded candidate generation, then applies a
+    deterministic query/document lexical score that is comparable across
+    segments. No relevance feedback or validation qrels are consulted.
     """
 
-    def __init__(self, repository: DocumentRepository):
+    def __init__(self, repository: DocumentRepository, segment_dir: str | Path):
         self.repository = repository
-        self._documents: dict[str, StoredDocument] = {}
-        self._index = build_tfidf_index({})
-        self._generation = -1
-        self.refresh()
+        self.segments = ImmutableSegmentStore(segment_dir, repository)
+        # Bootstrap repositories created before the segment architecture.
+        if self.segments.indexed_generation < repository.generation():
+            self.segments.publish_changes()
 
     @property
     def generation(self) -> int:
-        return self._generation
+        return self.segments.indexed_generation
 
-    def refresh(self) -> None:
-        generation, docs = self.repository.snapshot_documents()
-        self._documents = {str(doc.doc_id): doc for doc in docs}
-        searchable = {
-            str(doc.doc_id): (doc.title + "\n" + doc.text).strip()
-            for doc in docs
-            if doc.text.strip() or doc.title.strip()
-        }
-        self._index = build_tfidf_index(searchable)
-        self._generation = generation
+    def publish_pending(self) -> bool:
+        self.segments.ensure_loaded()
+        if self.repository.generation() <= self.segments.indexed_generation:
+            return False
+        return self.segments.publish_changes() is not None
+
+    def compact(self, *, max_segments: int = 8) -> bool:
+        return self.segments.compact(max_segments=max_segments) is not None
 
     def ensure_fresh(self) -> bool:
-        current = self.repository.generation()
-        if current == self._generation:
+        self.segments.ensure_loaded()
+        if self.repository.generation() <= self.segments.indexed_generation:
             return False
-        self.refresh()
-        return True
+        return self.publish_pending()
+
+    @staticmethod
+    def _lexical_score(doc: StoredDocument, terms: list[str]) -> tuple[float, tuple[str, ...]]:
+        body_tokens = tokenize(doc.text)
+        title_tokens = tokenize(doc.title)
+        body = Counter(body_tokens)
+        title = Counter(title_tokens)
+        unique = list(dict.fromkeys(terms))
+        if not unique:
+            return 0.0, ()
+
+        matched = sum(1 for term in unique if body.get(term, 0) or title.get(term, 0))
+        coverage = matched / len(unique)
+        tf_component = 0.0
+        title_component = 0.0
+        for term in terms:
+            if body.get(term, 0):
+                tf_component += 1.0 + math.log(body[term])
+            if title.get(term, 0):
+                title_component += 1.0 + math.log(title[term])
+
+        length_norm = 1.0 / math.sqrt(max(1.0, float(len(body_tokens))))
+        phrase = " ".join(terms)
+        title_phrase = phrase in " ".join(title_tokens) if phrase else False
+        body_phrase = phrase in " ".join(body_tokens) if phrase else False
+
+        score = (tf_component * length_norm) + (1.75 * title_component) + (2.0 * coverage)
+        evidence = ["body_lexical_match"]
+        if title_component > 0:
+            evidence.append("title_lexical_match")
+        if body_phrase or title_phrase:
+            score += 1.5
+            evidence.append("exact_phrase_match")
+        if coverage == 1.0 and len(unique) > 1:
+            score += 0.75
+            evidence.append("full_query_term_coverage")
+        return score, tuple(evidence)
 
     def search(self, query: str, *, k: int = 10) -> list[SearchHit]:
         self.ensure_fresh()
         terms = tokenize(query)
         if not terms or k <= 0:
             return []
-        # build_tfidf_index stores document-side weights. For the alpha query
-        # vector we use unit term weights; cosine normalization still provides
-        # deterministic lexical ranking without relevance feedback.
-        qvec = {term: 1.0 for term in terms}
-        ranked = self._index.retrieve("__query__", qvec, k=k)
+
+        candidates = self.segments.search_candidates(query, per_segment=max(50, int(k) * 8))
+        rescored: list[tuple[StoredDocument, float, tuple[str, ...]]] = []
+        for doc, _candidate_score in candidates.values():
+            score, evidence = self._lexical_score(doc, terms)
+            if score > 0:
+                rescored.append((doc, score, evidence))
+        rescored.sort(key=lambda item: (-item[1], item[0].url, item[0].doc_id))
+
         hits: list[SearchHit] = []
-        for doc_key, score in ranked:
-            doc = self._documents[doc_key]
+        for doc, score, evidence in rescored[: int(k)]:
             hits.append(
                 SearchHit(
                     doc_id=doc.doc_id,
@@ -74,7 +116,7 @@ class LiveSearchIndex:
                     title=doc.title or doc.url,
                     snippet=self._snippet(doc.text, terms),
                     score=float(score),
-                    evidence=("body_lexical_match",),
+                    evidence=evidence,
                 )
             )
         return hits
