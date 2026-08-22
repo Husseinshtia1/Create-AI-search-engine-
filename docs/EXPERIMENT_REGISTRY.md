@@ -41,7 +41,7 @@ This registry is the authoritative index of G97 Search experiments. Frozen valid
 
 | ID | Dataset | Protocol | Current status | Source ref |
 |---|---|---|---|---|
-| G97-CURLIE-001 | Homepage2Vec/Curlie | published test split only; 20k smallest SHA1(uid); shared top-level class relevance; body TF-IDF; internal inbound anchors; candidate budget 30; WebKB-only serialized controller | protocol/evaluator/controller frozen before Curlie retrieval metrics. Large streaming extraction and feasibility check in progress; parser-only fixes allowed. **FROZEN EXTERNAL VALIDATION** | PR #20 |
+| G97-CURLIE-001 | Homepage2Vec/Curlie | published test split only; 20k smallest SHA1(uid); shared top-level class relevance; body TF-IDF; internal inbound anchors; candidate budget 30; WebKB-only serialized controller | Full frozen 20k sample extracted with zero missing URLs/labels/HTML, but only 166 distinct inbound targets vs frozen feasibility requirement of 1,000. Evaluator correctly not run. **FROZEN EXTERNAL VALIDATION — FEASIBILITY FAILURE** | PR #20; `docs/CURLIE_EXTERNAL_VALIDATION_RESULT.md` |
 
 ## Key numeric record
 
@@ -106,6 +106,23 @@ Risk-calibrated policy     0.244801
 Delta                      +0.000066
 Gate rate                  ~2.59%
 ```
+
+### Curlie frozen feasibility
+
+```text
+Selected UIDs              20000
+URLs present               20000
+Labels present             20000
+HTML present               20000
+Directed internal edges    2720
+Anchor strings             4928
+Distinct inbound targets   166
+Required inbound targets   1000
+Feasibility ratio          16.6%
+Outcome                    FEASIBILITY FAILURE
+```
+
+No Curlie retrieval metric was produced because the predeclared graph-feasibility gate failed.
 
 ## Reproduction and provenance
 
