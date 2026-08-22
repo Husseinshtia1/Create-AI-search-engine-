@@ -1,0 +1,96 @@
+name: G97 Consolidate Experiment Archive
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/g97-consolidate-experiment-archive.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  consolidate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch experiment branches
+        run: |
+          set -euxo pipefail
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+      - name: Snapshot frozen experiment sources from all historical branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf experiments/archive
+          mkdir -p experiments/archive
+
+          cat > /tmp/refs.tsv <<'EOF'
+          01	g97-cacm-run-001
+          02	g97-cacm-run-002
+          03	g97-cisi-inspect-001
+          04	g97-cisi-run-001
+          05	g97-cora-stress-001
+          06	g97-cranfield-run-001
+          07	g97-citeseer-stress-001
+          08	g97-webkb-stress-001
+          09	g97-webv2-washington-001
+          10	g97-webv3-cmu-holdout-diag-001
+          11	g97-webv3-cmu-development-001
+          12	g97-sector-diagnostic-001
+          13	g97-sector-diagnostic-002
+          14	g97-webv4-misc-holdout-001
+          15	g97-webv5-evidence-budget-dev-001
+          16	g97-webv6-anchor-rescue-dev-001
+          17	g97-webv7-failure-diagnosed-rescue-001
+          18	g97-webv7-predictability-diag-001
+          19	g97-webv8-risk-calibrated-rescue-001
+          20	g97-curlie-external-validation-freeze-001
+          EOF
+
+          while IFS=$'\t' read -r num branch; do
+            ref="origin/$branch"
+            if ! git rev-parse --verify "$ref" >/dev/null 2>&1; then
+              echo "Missing branch $branch" >&2
+              exit 1
+            fi
+            dst="experiments/archive/pr-${num}-${branch}"
+            mkdir -p "$dst"
+            sha=$(git rev-parse "$ref")
+            printf '%s\n' "$branch" > "$dst/BRANCH.txt"
+            printf '%s\n' "$sha" > "$dst/COMMIT_SHA.txt"
+
+            # Preserve every experiment source and workflow present on the branch.
+            if git ls-tree -d --name-only "$ref" experiments | grep -q '^experiments$'; then
+              mkdir -p "$dst/repo"
+              git archive "$ref" experiments | tar -x -C "$dst/repo"
+            fi
+            if git ls-tree -d --name-only "$ref" .github | grep -q '^.github$'; then
+              mkdir -p "$dst/repo"
+              git archive "$ref" .github/workflows 2>/dev/null | tar -x -C "$dst/repo" || true
+            fi
+          done < /tmp/refs.tsv
+
+          cat > experiments/archive/README.md <<'EOF'
+          # Frozen experiment archive
+
+          This directory is generated from the historical experiment branches. Each `pr-XX-*` directory stores the exact `experiments/` and workflow sources visible at that branch head plus the branch name and commit SHA.
+
+          These snapshots are provenance artifacts. Do not edit them to improve old results. Reusable/refactored code belongs under `src/g97/`; exact reproduction should prefer these snapshots or the original commit SHA.
+          EOF
+
+      - name: Commit consolidated archive to main
+        run: |
+          set -euxo pipefail
+          git config user.name 'g97-archive-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add experiments/archive
+          if git diff --cached --quiet; then
+            echo 'Archive already current.'
+            exit 0
+          fi
+          git commit -m 'Archive all historical G97 experiment sources [skip ci]'
+          git push origin HEAD:main
