@@ -4,7 +4,9 @@ from nltk.stem import PorterStemmer
 P=PorterStemmer(); RX=re.compile(r"[A-Za-z0-9]+(?:'[A-Za-z]+)?")
 def tok(s): return [P.stem(x.lower()) for x in RX.findall(s or '')]
 def parse_docs(p):
-    root=ET.parse(p).getroot(); out={}
+    raw=open(p,encoding='utf-8',errors='replace').read()
+    raw=re.sub(r'^\s*<\?xml[^>]*\?>','',raw,count=1)
+    root=ET.fromstring('<root>'+raw+'</root>'); out={}
     for d in root.findall('.//doc'):
         did=int((d.findtext('docno') or '0').strip()); title=d.findtext('title') or ''; text=d.findtext('text') or ''
         out[did]=title+' '+text
