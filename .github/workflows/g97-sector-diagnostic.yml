@@ -1,0 +1,40 @@
+name: G97 Sector Diagnostic
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and inspect CMU Industry Sector corpus
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 4 --retry-all-errors https://www.cs.cmu.edu/afs/cs.cmu.edu/project/theo-4/text-learning/www/sector-data.tar.gz -o /tmp/sector.tar.gz
+          ls -lh /tmp/sector.tar.gz
+          tar tzf /tmp/sector.tar.gz > /tmp/files.txt
+          echo FILES=$(wc -l < /tmp/files.txt)
+          sed -n '1,160p' /tmp/files.txt
+          mkdir -p /tmp/sector && tar xzf /tmp/sector.tar.gz -C /tmp/sector
+          echo '--- dirs ---'
+          find /tmp/sector -maxdepth 3 -type d | head -160
+          echo '--- sample files ---'
+          find /tmp/sector -type f | head -30
+          f=$(find /tmp/sector -type f | head -1); echo "SAMPLE=$f"; zcat -f "$f" 2>/dev/null | head -120 || true
+          echo '--- HTML/HREF counts from first 300 files ---'
+          python - <<'PY'
+          from pathlib import Path
+          import gzip,re
+          fs=[p for p in Path('/tmp/sector').rglob('*') if p.is_file()][:300]
+          htmls=hrefs=urls=0
+          for p in fs:
+              try:
+                  b=p.read_bytes()
+                  if p.suffix=='.gz': b=gzip.decompress(b)
+                  s=b.decode('latin1','ignore')
+              except Exception: continue
+              htmls += int(bool(re.search(r'<html|<body|<a\s',s,re.I)))
+              hrefs += len(re.findall(r'href\s*=',s,re.I))
+              urls += int('http://' in p.name or 'https://' in p.name or 'http:' in p.name)
+          print('sample_files',len(fs),'html_like',htmls,'hrefs',hrefs,'urlish_filenames',urls)
+          PY
