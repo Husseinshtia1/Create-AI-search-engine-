@@ -1,0 +1,1 @@
+Trigger CISI format inspection only. No scoring. No qrels used for model decisions.
