@@ -1,0 +1,26 @@
+name: G97 Web v3 CMU Relation Format Diagnostic
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect original relation formats
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 3 https://www.cs.cmu.edu/~WebKB/ilp-data.tar -o /tmp/ilp-data.tar
+          mkdir -p /tmp/ilp && tar xf /tmp/ilp-data.tar -C /tmp/ilp
+          echo '=== common.gz first 160 ==='
+          zcat /tmp/ilp/background-relations/common.gz | head -160 || true
+          echo '=== anchor words sans washington first 120 ==='
+          zcat /tmp/ilp/background-relations/anchor-words.sans-washington.gz | head -120 || true
+          echo '=== neighborhood words sans washington first 120 ==='
+          zcat /tmp/ilp/background-relations/neighborhood-words.sans-washington.gz | head -120 || true
+          echo '=== page words sans washington first 80 ==='
+          zcat /tmp/ilp/background-relations/page-words.sans-washington.gz | head -80 || true
+          echo '=== one raw anchor-text file ==='
+          f=$(find /tmp/ilp/anchor-text/washington -type f | head -1); echo "$f"; cat "$f" | head -80 || true
+          echo '=== matching neighborhood-text file if present ==='
+          b=$(basename "$f"); if [ -f "/tmp/ilp/neighborhood-text/washington/$b" ]; then cat "/tmp/ilp/neighborhood-text/washington/$b" | head -120; fi

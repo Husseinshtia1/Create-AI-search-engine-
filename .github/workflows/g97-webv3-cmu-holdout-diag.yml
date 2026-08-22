@@ -1,0 +1,32 @@
+name: G97 Web v3 CMU Holdout Diagnostic
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch original CMU WebKB ILP archive
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 3 https://www.cs.cmu.edu/~WebKB/ilp-data.tar -o /tmp/ilp-data.tar
+          ls -lh /tmp/ilp-data.tar
+          tar tf /tmp/ilp-data.tar > /tmp/files.txt
+          echo "FILES=$(wc -l < /tmp/files.txt)"
+          echo '--- TOP LEVEL ---'
+          sed -n '1,120p' /tmp/files.txt
+          echo '--- ANCHOR/CONTEXT PATHS ---'
+          grep -Ei 'anchor|around|context|href|link' /tmp/files.txt | head -200 || true
+          echo '--- MISC/OTHER PATHS ---'
+          grep -Ei 'misc|other' /tmp/files.txt | head -200 || true
+          echo '--- UNIVERSITY PATH COUNTS ---'
+          for x in cornell texas washington wisconsin misc other; do printf "$x "; grep -Eic "$x" /tmp/files.txt || true; done
+      - name: Extract readme and structural summaries only
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/ilp
+          tar xf /tmp/ilp-data.tar -C /tmp/ilp
+          find /tmp/ilp -maxdepth 3 -type f | sed -n '1,200p'
+          find /tmp/ilp -type f \( -iname '*readme*' -o -iname '*anchor*' -o -iname '*relation*' \) -print | head -100
+          for f in $(find /tmp/ilp -type f -iname '*readme*' | head -10); do echo "===== $f ====="; zcat -f "$f" 2>/dev/null | head -200 || true; done
