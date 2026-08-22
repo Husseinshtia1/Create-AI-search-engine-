@@ -10,7 +10,7 @@ Predeclared diagnostic protocol before reading these results:
 - Outcome label is defined only after rankings exist:
     positive = HybridExact30 recall > Body30 recall
     negative = HybridExact30 recall < Body30 recall
-    ties are excluded from classifier fitting/evaluation.
+    ties are excluded from classifier fitting/AUC evaluation.
 - Observable feature vector (no labels required):
     1 margin10
     2 coherence10
@@ -29,19 +29,20 @@ Predeclared diagnostic protocol before reading these results:
   to positive centroid. Positive score predicts benefit. No threshold tuning.
 - Report OOF ROC-AUC, balanced accuracy at score>0, positive prevalence, and
   precision among the top 10% highest OOF scores as descriptive evidence.
+- Additional policy diagnostic (declared after the first AUC result, before policy
+  result): score every held-out query, including ties; if score>0 use HybridExact30,
+  otherwise preserve Body30. Compare mean recall directly with Body30. Threshold
+  remains the natural untuned centroid boundary score>0.
 """
-import argparse, collections, importlib.util, math, statistics
+import argparse, collections, importlib.util, math
 from pathlib import Path
 
 HERE=Path(__file__).resolve().parent
 spec=importlib.util.spec_from_file_location('v7',HERE/'g97_webv7.py')
 v7=importlib.util.module_from_spec(spec);spec.loader.exec_module(v7)
 
-
 def auc(scores,labels):
-    # Mann-Whitney formulation, tie-aware by average ranks.
-    pairs=sorted(zip(scores,labels),key=lambda x:x[0])
-    n=len(pairs);ranks=[0.0]*n;i=0
+    pairs=sorted(zip(scores,labels),key=lambda x:x[0]);n=len(pairs);ranks=[0.0]*n;i=0
     while i<n:
         j=i+1
         while j<n and pairs[j][0]==pairs[i][0]:j+=1
@@ -61,8 +62,7 @@ def balanced_acc(scores,labels):
         elif y==1:fn+=1
         elif p==0:tn+=1
         else:fp+=1
-    tpr=tp/(tp+fn) if tp+fn else 0
-    tnr=tn/(tn+fp) if tn+fp else 0
+    tpr=tp/(tp+fn) if tp+fn else 0;tnr=tn/(tn+fp) if tn+fp else 0
     return (tpr+tnr)/2,tpr,tnr,tp,fn,tn,fp
 
 def zstats(rows):
@@ -81,8 +81,7 @@ def main():
     ap=argparse.ArgumentParser();ap.add_argument('--root',required=True);ap.add_argument('--out',default='predictability.tsv');args=ap.parse_args()
     docs,paths=v7.load_pages(args.root)
     bodyv,bodyn=v7.build_tfidf({d:x['text'] for d,x in docs.items()})
-    weighted,out=v7.external_descriptions(docs)
-    anchv,anchn=v7.build_anchor_vectors(weighted,docs)
+    weighted,out=v7.external_descriptions(docs);anchv,anchn=v7.build_anchor_vectors(weighted,docs)
     byuni=collections.defaultdict(list)
     for d,x in docs.items():byuni[x['uni']].append(d)
 
@@ -100,19 +99,13 @@ def main():
             body_runs[q]=[d for d,_ in br];anchor_runs[q]=[d for d,_ in ar]
             topb=br[:10];topa=ar[:10]
             if topb:
-                s1=topb[0][1];s10=topb[min(9,len(topb)-1)][1]
-                margin=(s1-s10)/(s1+1e-12)
-                meanb=sum(s for _,s in topb)/len(topb)
-                sdb=math.sqrt(sum((s-meanb)**2 for _,s in topb)/len(topb))
-                cv=sdb/(meanb+1e-12)
+                s1=topb[0][1];s10=topb[min(9,len(topb)-1)][1];margin=(s1-s10)/(s1+1e-12)
+                meanb=sum(s for _,s in topb)/len(topb);sdb=math.sqrt(sum((s-meanb)**2 for _,s in topb)/len(topb));cv=sdb/(meanb+1e-12)
             else:s1=meanb=cv=margin=0.0
             coh=v7.coherence([d for d,_ in topb],bodyv,bodyn)
-            asum=sum(s for _,s in topa);a3=sum(s for _,s in topa[:3])
-            aconc=a3/asum if asum else 0.0
+            asum=sum(s for _,s in topa);a3=sum(s for _,s in topa[:3]);aconc=a3/asum if asum else 0.0
             b20=set(d for d,_ in br[:20]);nov=sum(1 for d,_ in topa if d not in b20)/10.0
-            at1=topa[0][1] if topa else 0.0
-            acount=len(topa)/10.0
-            qlen=math.log1p(len(v7.toks(docs[q]['text'])))
+            at1=topa[0][1] if topa else 0.0;acount=len(topa)/10.0;qlen=math.log1p(len(v7.toks(docs[q]['text'])))
             obs[q]=[margin,coh,aconc,nov,s1,meanb,cv,qlen,at1,acount]
 
     labels_map={}
@@ -121,43 +114,52 @@ def main():
         for cls in v7.CLASSES:
             if f'/page-text/{cls}/' in pp:labels_map[u]=cls;break
 
-    outcome={}
+    outcome={};perf={}
     for q,br in body_runs.items():
         uni=docs[q]['uni'];rel={d for d in byuni[uni] if d!=q and labels_map.get(d)==labels_map.get(q)}
         if not rel:continue
-        body=br[:30];hyb=v7.exact_rescue(br,anchor_runs[q],30)
-        rb=v7.recall(body,rel);rh=v7.recall(hyb,rel)
+        rb=v7.recall(br[:30],rel);rh=v7.recall(v7.exact_rescue(br,anchor_runs[q],30),rel);perf[q]=(rb,rh)
         if rh>rb+1e-12:outcome[q]=1
         elif rh<rb-1e-12:outcome[q]=0
         else:outcome[q]=None
 
-    oof=[];foldstats=[]
+    oof=[];all_scores={};foldstats=[]
     for held in v7.UNIS:
         train=[q for q in outcome if docs[q]['uni']!=held and outcome[q] is not None]
-        test=[q for q in outcome if docs[q]['uni']==held and outcome[q] is not None]
+        test_nt=[q for q in outcome if docs[q]['uni']==held and outcome[q] is not None]
+        test_all=[q for q in outcome if docs[q]['uni']==held]
         X=[obs[q] for q in train];m,s=zstats(X)
-        pos=[zrow(obs[q],m,s) for q in train if outcome[q]==1]
-        neg=[zrow(obs[q],m,s) for q in train if outcome[q]==0]
+        pos=[zrow(obs[q],m,s) for q in train if outcome[q]==1];neg=[zrow(obs[q],m,s) for q in train if outcome[q]==0]
         cp=centroid(pos);cn=centroid(neg)
-        fs=[];ys=[]
-        for q in test:
-            z=zrow(obs[q],m,s);score=d2(z,cn)-d2(z,cp);y=outcome[q]
-            oof.append((q,held,score,y));fs.append(score);ys.append(y)
+        for q in test_all:
+            z=zrow(obs[q],m,s);all_scores[q]=d2(z,cn)-d2(z,cp)
+        fs=[all_scores[q] for q in test_nt];ys=[outcome[q] for q in test_nt]
+        for q in test_nt:oof.append((q,held,all_scores[q],outcome[q]))
         ba,tpr,tnr,tp,fn,tn,fp=balanced_acc(fs,ys)
-        foldstats.append((held,len(test),sum(ys)/len(ys),auc(fs,ys),ba,tpr,tnr,tp,fn,tn,fp))
+        foldstats.append((held,len(test_nt),sum(ys)/len(ys),auc(fs,ys),ba,tpr,tnr,tp,fn,tn,fp))
 
     scores=[x[2] for x in oof];ys=[x[3] for x in oof]
     A=auc(scores,ys);ba,tpr,tnr,tp,fn,tn,fp=balanced_acc(scores,ys)
-    order=sorted(oof,key=lambda x:x[2],reverse=True)
-    topn=max(1,math.ceil(0.10*len(order)));top=order[:topn]
+    order=sorted(oof,key=lambda x:x[2],reverse=True);topn=max(1,math.ceil(0.10*len(order)));top=order[:topn]
     top_prec=sum(x[3] for x in top)/len(top);base=sum(ys)/len(ys);lift=top_prec/base if base else float('nan')
+
+    # Untuned score>0 OOF policy effect across all queries (including ties).
+    body_sum=policy_sum=forced_sum=0.0;gate=win=loss=tie=0;N=0
+    bypol=collections.defaultdict(lambda:collections.Counter())
+    for q,(rb,rh) in perf.items():
+        sc=all_scores[q];use=sc>0;rp=rh if use else rb;d=rp-rb;uni=docs[q]['uni']
+        N+=1;body_sum+=rb;forced_sum+=rh;policy_sum+=rp;gate+=int(use);win+=int(d>1e-12);loss+=int(d<-1e-12);tie+=int(abs(d)<=1e-12)
+        z=bypol[uni];z['n']+=1;z['body']+=rb;z['policy']+=rp;z['gate']+=int(use);z['win']+=int(d>1e-12);z['loss']+=int(d<-1e-12);z['tie']+=int(abs(d)<=1e-12)
 
     with open(args.out,'w') as f:
         f.write('scope\tnontie_queries\tpositive_rate\tAUC\tbalanced_accuracy\tTPR\tTNR\tTP\tFN\tTN\tFP\n')
         f.write(f'ALL\t{len(ys)}\t{base:.6f}\t{A:.6f}\t{ba:.6f}\t{tpr:.6f}\t{tnr:.6f}\t{tp}\t{fn}\t{tn}\t{fp}\n')
-        for r in foldstats:
-            f.write(f'{r[0]}\t{r[1]}\t{r[2]:.6f}\t{r[3]:.6f}\t{r[4]:.6f}\t{r[5]:.6f}\t{r[6]:.6f}\t{r[7]}\t{r[8]}\t{r[9]}\t{r[10]}\n')
+        for r in foldstats:f.write(f'{r[0]}\t{r[1]}\t{r[2]:.6f}\t{r[3]:.6f}\t{r[4]:.6f}\t{r[5]:.6f}\t{r[6]:.6f}\t{r[7]}\t{r[8]}\t{r[9]}\t{r[10]}\n')
         f.write(f'TOP10PCT_PRECISION\t{topn}\t{top_prec:.6f}\tLIFT\t{lift:.6f}\n')
+        f.write('\nOOF_POLICY_score_gt_0\tqueries\tgate_rate\tBodyRecall30\tPolicyRecall30\tDelta\twins\tlosses\tties\n')
+        f.write(f'ALL\t{N}\t{gate/N:.6f}\t{body_sum/N:.6f}\t{policy_sum/N:.6f}\t{(policy_sum-body_sum)/N:.6f}\t{win}\t{loss}\t{tie}\n')
+        for uni in v7.UNIS:
+            z=bypol[uni];n=z['n'];f.write(f'{uni}\t{n}\t{z["gate"]/n:.6f}\t{z["body"]/n:.6f}\t{z["policy"]/n:.6f}\t{(z["policy"]-z["body"])/n:.6f}\t{z["win"]}\t{z["loss"]}\t{z["tie"]}\n')
     detail=Path(args.out).with_name('oof_scores.tsv')
     with open(detail,'w') as f:
         f.write('query\theldout_uni\tscore\tbenefit_label\n')
