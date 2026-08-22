@@ -1,6 +1,5 @@
 name: G97 Web v4 Misc Holdout
 on:
-  pull_request:
   workflow_dispatch:
 jobs:
   benchmark:
