@@ -1,0 +1,32 @@
+name: G97 Web v5 Evidence Budget Development
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fetch original full WebKB archive
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 3 --retry-all-errors \
+            https://www.cs.cmu.edu/afs/cs/project/theo-20/www/data/webkb-data.gtar.gz \
+            -o /tmp/webkb-data.gtar.gz
+          mkdir -p /tmp/webkb
+          tar xzf /tmp/webkb-data.gtar.gz -C /tmp/webkb
+      - name: Run exact-budget development experiment
+        run: |
+          set -euxo pipefail
+          mkdir -p experiments/g97-webv5-evidence-budget-dev/out
+          python experiments/g97-webv5-evidence-budget-dev/g97_webv5_dev.py \
+            --root /tmp/webkb \
+            --out experiments/g97-webv5-evidence-budget-dev/out/results.tsv \
+            | tee experiments/g97-webv5-evidence-budget-dev/out/run.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g97-webv5-evidence-budget-dev-results
+          path: experiments/g97-webv5-evidence-budget-dev/out/
