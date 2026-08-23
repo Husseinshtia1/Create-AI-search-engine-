@@ -1,0 +1,1 @@
+Diagnostic acquisition retry only; no ranking or model parameters.
