@@ -1,0 +1,50 @@
+name: G97 Sector Diagnostic v2
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and inspect CMU Industry Sector corpus
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 4 --retry-all-errors https://www.cs.cmu.edu/~TextLearning/sector-data.tar.gz -o /tmp/sector.tar.gz
+          ls -lh /tmp/sector.tar.gz
+          tar tzf /tmp/sector.tar.gz > /tmp/files.txt
+          echo FILES=$(wc -l < /tmp/files.txt)
+          sed -n '1,120p' /tmp/files.txt
+          mkdir -p /tmp/sector && tar xzf /tmp/sector.tar.gz -C /tmp/sector
+          echo '--- directory counts ---'
+          find /tmp/sector -maxdepth 3 -type d | head -180
+          echo '--- sample files ---'
+          find /tmp/sector -type f | head -25
+          f=$(find /tmp/sector -type f | head -1); echo "SAMPLE=$f"; zcat -f "$f" 2>/dev/null | head -100 || true
+          echo '--- structural sample ---'
+          python - <<'PY'
+          from pathlib import Path
+          import gzip,re,collections
+          fs=[p for p in Path('/tmp/sector').rglob('*') if p.is_file()]
+          sample=fs[:500]
+          htmls=hrefs=urlish=0
+          ex=[]
+          for p in sample:
+              try:
+                  b=p.read_bytes()
+                  if p.suffix=='.gz': b=gzip.decompress(b)
+                  s=b.decode('latin1','ignore')
+              except Exception: continue
+              ishtml=bool(re.search(r'<html|<body|<a\s',s,re.I))
+              htmls += int(ishtml)
+              n=len(re.findall(r'href\s*=',s,re.I)); hrefs+=n
+              urlish += int(('http://' in p.name) or ('https://' in p.name) or ('^' in p.name))
+              if n and len(ex)<5: ex.append((str(p),n,re.findall(r'(?is)<a[^>]+href\s*=\s*["\']?([^"\' >]+)',s)[:5]))
+          tops=collections.Counter()
+          for p in fs:
+              try: tops[p.relative_to('/tmp/sector').parts[0]]+=1
+              except: pass
+          print('all_files',len(fs),'sample_files',len(sample),'html_like',htmls,'hrefs',hrefs,'urlish_names',urlish)
+          print('top_level_file_counts',tops.most_common(20))
+          print('href_examples',ex)
+          PY
